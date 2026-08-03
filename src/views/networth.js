@@ -1,7 +1,7 @@
 import { supabase, getCurrentUserId } from '../supabase.js';
 import {
   USER_AGE, USER_MONTHLY_NET_INCOME, USER_MONTHLY_EXPENSES,
-  FI_TARGET, PASSIVE_INCOME_YIELD
+  FI_TARGET, PASSIVE_INCOME_YIELD, EMERGENCY_RUNWAY_HEALTHY_TARGET, SOLVENCY_HEALTHY_TARGET
 } from '../constants.js';
 import {
   formatINR, formatINRFull, formatPercent, formatDate, todayISO,
@@ -215,8 +215,8 @@ function renderKPIs() {
       value: solvency !== null ? solvency.toFixed(2) + '×' : 'No Debt',
       raw: solvency?.toFixed(2) ?? 0,
       sub: cur.liabilities > 0 ? `Liabilities: ${formatINR(cur.liabilities)}` : 'Debt-free 🎉',
-      badge: solvency !== null ? { text: solvency > 3 ? 'Strong' : 'Watch it', type: solvency > 3 ? 'positive' : 'neutral' } : { text: 'Debt-free', type: 'positive' },
-      tooltip: 'Assets ÷ Liabilities. Higher is better. > 3× is considered healthy.',
+      badge: solvency !== null ? { text: solvency > SOLVENCY_HEALTHY_TARGET ? 'Strong' : 'Watch it', type: solvency > SOLVENCY_HEALTHY_TARGET ? 'positive' : 'neutral' } : { text: 'Debt-free', type: 'positive' },
+      tooltip: `Assets ÷ Liabilities. Higher is better. > ${SOLVENCY_HEALTHY_TARGET}× is considered healthy.`,
     },
     {
       id: 'kpi-passive', label: 'Est. Passive Income', icon: '💸', color: 'var(--purple-glow)', iconBg: 'rgba(167,139,250,0.1)',
@@ -225,12 +225,12 @@ function renderKPIs() {
       tooltip: '(Stocks + MFs + FDs) × 4.5% ÷ 12. Blended estimated monthly passive income.',
     },
     {
-      id: 'kpi-runway', label: 'Emergency Runway', icon: '🛡️', color: runway >= 6 ? 'var(--success-glow)' : 'var(--warning-glow)',
-      iconBg: runway >= 6 ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)',
+      id: 'kpi-runway', label: 'Emergency Runway', icon: '🛡️', color: runway >= EMERGENCY_RUNWAY_HEALTHY_TARGET ? 'var(--success-glow)' : 'var(--warning-glow)',
+      iconBg: runway >= EMERGENCY_RUNWAY_HEALTHY_TARGET ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)',
       value: runway.toFixed(1) + ' months', raw: runway.toFixed(1),
-      badge: { text: runway >= 6 ? '✓ Safe' : 'Build up', type: runway >= 6 ? 'positive' : 'neutral' },
+      badge: { text: runway >= EMERGENCY_RUNWAY_HEALTHY_TARGET ? '✓ Safe' : 'Build up', type: runway >= EMERGENCY_RUNWAY_HEALTHY_TARGET ? 'positive' : 'neutral' },
       sub: `Liquid ÷ ₹${(USER_MONTHLY_EXPENSES/1000).toFixed(0)}k/mo baseline`,
-      tooltip: 'Liquid assets ÷ monthly baseline expenses. Target: ≥ 6 months.',
+      tooltip: `Liquid assets ÷ monthly baseline expenses. Target: ≥ ${EMERGENCY_RUNWAY_HEALTHY_TARGET} months.`,
     },
     {
       id: 'kpi-fi', label: 'FI Progress', icon: '🎯', color: 'var(--pink-glow)', iconBg: 'rgba(244,114,182,0.1)',

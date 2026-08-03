@@ -1,5 +1,5 @@
 import { supabase } from '../supabase.js';
-import { USER_NAME, USER_MONTHLY_EXPENSES, FI_TARGET, POINTS_PER_EUR, EUR_INR_FALLBACK } from '../constants.js';
+import { USER_NAME, USER_MONTHLY_EXPENSES, FI_TARGET, POINTS_PER_EUR, EUR_INR_FALLBACK, EMERGENCY_RUNWAY_HEALTHY_TARGET, CC_REWARD_TARGET_RATE } from '../constants.js';
 import { formatINR, formatINRFull, formatPercent, applyChartDefaults, destroyChart, makeCopyable, fetchEURtoINR, CHART_COLORS, ASSET_COLORS } from '../utils.js';
 import { navigateTo } from '../router.js';
 
@@ -194,12 +194,12 @@ async function loadDashboardData() {
     },
     {
       id: 'dk-runway', label: 'Emergency Runway', icon: '🛡️',
-      iconBg: runway >= 6 ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)',
-      glow: runway >= 6 ? 'var(--success-glow)' : 'var(--warning-glow)',
+      iconBg: runway >= EMERGENCY_RUNWAY_HEALTHY_TARGET ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)',
+      glow: runway >= EMERGENCY_RUNWAY_HEALTHY_TARGET ? 'var(--success-glow)' : 'var(--warning-glow)',
       value: runway.toFixed(1) + ' months', raw: runway.toFixed(1),
-      badge: { text: runway >= 6 ? 'Healthy' : 'Build up', type: runway >= 6 ? 'positive' : 'neutral' },
+      badge: { text: runway >= EMERGENCY_RUNWAY_HEALTHY_TARGET ? 'Healthy' : 'Build up', type: runway >= EMERGENCY_RUNWAY_HEALTHY_TARGET ? 'positive' : 'neutral' },
       sub: `Liquid ÷ ₹${(USER_MONTHLY_EXPENSES/1000).toFixed(0)}k/mo`,
-      tooltip: 'Liquid assets ÷ monthly baseline expenses. Target ≥ 6 months.',
+      tooltip: `Liquid assets ÷ monthly baseline expenses. Target ≥ ${EMERGENCY_RUNWAY_HEALTHY_TARGET} months.`,
     },
   ];
 
@@ -252,8 +252,8 @@ async function loadDashboardData() {
       {
         label: 'Reward Rate',
         value: formatPercent(rewardRate),
-        sub: rewardRate >= 8 ? '✓ Above 8% target' : 'Target: > 8%',
-        color: rewardRate >= 8 ? 'var(--success)' : 'var(--warning)',
+        sub: rewardRate >= CC_REWARD_TARGET_RATE ? `✓ Above ${CC_REWARD_TARGET_RATE}% target` : `Target: > ${CC_REWARD_TARGET_RATE}%`,
+        color: rewardRate >= CC_REWARD_TARGET_RATE ? 'var(--success)' : 'var(--warning)',
       },
     ];
 

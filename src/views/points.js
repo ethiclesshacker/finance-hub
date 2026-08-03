@@ -1,5 +1,5 @@
 import { supabase, getCurrentUserId } from '../supabase.js';
-import { POINTS_PER_EUR, EUR_INR_FALLBACK, MULTIPLIER_OPTIONS, REDEMPTION_PARTNERS } from '../constants.js';
+import { POINTS_PER_EUR, EUR_INR_FALLBACK, MULTIPLIER_OPTIONS, REDEMPTION_PARTNERS, CC_MILESTONE_TARGET, CC_REWARD_TARGET_RATE } from '../constants.js';
 import {
   formatINR, formatINRFull, formatPercent, formatDate, todayISO,
   applyChartDefaults, destroyChart, makeCopyable, downloadCSV,
@@ -21,6 +21,16 @@ let searchTerm = '';
 let filterMultiplier = '';
 let filterPartner = '';
 let filterMerchant = '';
+
+function getMultiplierBadgeClass(multiplier) {
+  const val = parseFloat(multiplier);
+  if (val === 0) return 'badge-gray';
+  if (val === 2) return 'badge-blue';
+  if (val === 4) return 'badge-yellow';
+  if (val === 16) return 'badge-purple';
+  if (val === 24) return 'badge-green';
+  return 'badge-blue';
+}
 
 export async function renderPoints(container) {
   activeTab = 'transactions';
@@ -217,11 +227,16 @@ function renderKPIs() {
   });
   const topMerchant = Object.entries(merchantSpend).sort((a,b) => b[1]-a[1])[0];
 
+  const milestone = CC_MILESTONE_TARGET;
+  const progressPct = (totalSpent / milestone) * 100;
+  const remaining = Math.max(milestone - totalSpent, 0);
+
   const kpis = [
     {
       id: 'pt-kpi-spent', label: 'Total Spent', icon: '🛒', color: 'var(--accent-glow)', iconBg: 'rgba(56,189,248,0.1)',
       value: formatINRFull(totalSpent), raw: totalSpent,
-      sub: topMerchant ? `Top: ${topMerchant[0]} (${formatINR(topMerchant[1])})` : `${transactions.length} transactions`,
+      progress: Math.min(progressPct, 100),
+      sub: progressPct >= 100 ? 'Milestone achieved! 🎉' : `₹${Math.round(remaining).toLocaleString('en-IN')} to ₹${(CC_MILESTONE_TARGET/100000).toFixed(0)}L milestone`,
       tooltip: 'Lifetime total INR spend on the HSBC TravelOne card.',
     },
     {
@@ -254,8 +269,8 @@ function renderKPIs() {
       id: 'pt-kpi-rate', label: 'Reward Rate', icon: '📈', color: 'var(--pink-glow)', iconBg: 'rgba(244,114,182,0.1)',
       value: formatPercent(rewardRate), raw: rewardRate.toFixed(2),
       sub: `Avg value per point: ₹${avgVPP.toFixed(2)}`,
-      badge: rewardRate > 0 ? { text: rewardRate >= 8 ? '✓ >8% target' : `Target: 8%`, type: rewardRate >= 8 ? 'positive' : 'neutral' } : null,
-      tooltip: '(Redemption value + Balance INR) ÷ Total Spend × 100. Target > 8%.',
+      badge: rewardRate > 0 ? { text: rewardRate >= CC_REWARD_TARGET_RATE ? `✓ >${CC_REWARD_TARGET_RATE}% target` : `Target: ${CC_REWARD_TARGET_RATE}%`, type: rewardRate >= CC_REWARD_TARGET_RATE ? 'positive' : 'neutral' } : null,
+      tooltip: `(Redemption value + Balance INR) ÷ Total Spend × 100. Target > ${CC_REWARD_TARGET_RATE}%.`,
     },
   ];
 
@@ -269,6 +284,11 @@ function renderKPIs() {
         <div class="kpi-icon" style="background:${k.iconBg}">${k.icon}</div>
       </div>
       <div class="kpi-value mono">${k.value}</div>
+      ${k.progress !== undefined ? `
+        <div class="progress-wrap" style="margin:0.4rem 0">
+          <div class="progress-bar" style="width:${k.progress}%"></div>
+        </div>
+      ` : ''}
       <div class="kpi-sub">
         ${k.badge ? `<span class="kpi-badge ${k.badge.type}">${k.badge.text}</span> ` : ''}
         ${k.sub}
@@ -461,7 +481,7 @@ function renderTxTable() {
       t.merchant,
       t.description || '—',
       gridjs.html(`<span style="font-weight:600">₹${parseFloat(t.amount||0).toLocaleString('en-IN')}</span>`),
-      gridjs.html(`<span class="badge badge-blue">${t.multiplier}×</span>`),
+      gridjs.html(`<span class="badge ${getMultiplierBadgeClass(t.multiplier)}">${t.multiplier}×</span>`),
       gridjs.html(`<span style="color:var(--success);font-weight:600">${Math.round(pts).toLocaleString('en-IN')} pts</span>`),
       gridjs.html(`
         <div style="display:flex;gap:0.35rem">

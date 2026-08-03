@@ -1319,6 +1319,7 @@ input, select, textarea {
 .badge-red { background: var(--danger-dim); color: var(--danger); border: 1px solid rgba(239,68,68,0.2); }
 .badge-yellow { background: var(--warning-dim); color: var(--warning); border: 1px solid rgba(245,158,11,0.2); }
 .badge-purple { background: var(--purple-dim); color: var(--purple); border: 1px solid rgba(167,139,250,0.2); }
+.badge-gray { background: rgba(148,163,184,0.1); color: var(--text-muted); border: 1px solid rgba(148,163,184,0.15); }
 
 /* Progress bar */
 .progress-wrap {
