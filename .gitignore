@@ -27,3 +27,6 @@ dist-ssr
 .env
 .env*.local
 
+# Stray key material — belongs in ~/.ssh, never in a repo
+*_ssh_key*
+*.pem
