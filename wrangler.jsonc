@@ -1,0 +1,12 @@
+{
+  // Cloudflare Pages — direct upload (no Git integration on this project).
+  // The bundle is built locally by `npm run build` and pushed from ./dist,
+  // so VITE_* vars come from the local .env at build time, NOT from
+  // Cloudflare's environment variables.
+  //
+  //   npm run deploy          → production   (finance.aadityavs.dev)
+  //   npm run deploy:preview  → preview URL
+  "name": "finance",
+  "compatibility_date": "2026-08-16",
+  "pages_build_output_dir": "dist"
+}

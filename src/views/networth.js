@@ -1,12 +1,11 @@
+import { Chart, Grid, gridHtml } from '../vendor.js';
 import { supabase, getCurrentUserId } from '../supabase.js';
-import {
-  USER_AGE, USER_MONTHLY_NET_INCOME, USER_MONTHLY_EXPENSES,
-  FI_TARGET, PASSIVE_INCOME_YIELD, EMERGENCY_RUNWAY_HEALTHY_TARGET, SOLVENCY_HEALTHY_TARGET
-} from '../constants.js';
+import * as settings from '../settings.js';
 import {
   formatINR, formatINRFull, formatPercent, formatDate, todayISO,
-  applyChartDefaults, destroyChart, makeCopyable, downloadCSV,
-  openModal, closeModal, showToast, parseNum, ASSET_COLORS, CHART_COLORS
+  destroyChart, makeCopyable, downloadCSV, escapeHTML, cssVar,
+  openModal, closeModal, showToast, parseNum, ASSET_COLORS, CHART_COLORS,
+  computeNet, computeAssets, computeLiquid, computeEmergencyFund
 } from '../utils.js';
 
 let entries = [];
@@ -31,7 +30,7 @@ export async function renderNetWorth(container) {
         <p>Track your assets, liabilities, and financial independence progress</p>
       </div>
       <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
-        <button class="btn-sm btn-ghost" id="nw-export-btn">
+        <button type="button" class="btn-sm btn-ghost" id="nw-export-btn">
           <i class="fas fa-download"></i> Export CSV
         </button>
       </div>
@@ -56,8 +55,8 @@ export async function renderNetWorth(container) {
               <div class="chart-subtitle">Net worth over time</div>
             </div>
             <div class="chart-toggle">
-              <button class="chart-toggle-btn active" id="nw-line-btn">Line</button>
-              <button class="chart-toggle-btn" id="nw-bar-btn">Bar</button>
+              <button type="button" class="chart-toggle-btn active" id="nw-line-btn">Line</button>
+              <button type="button" class="chart-toggle-btn" id="nw-bar-btn">Bar</button>
             </div>
           </div>
           <div class="chart-canvas-wrap">
@@ -92,7 +91,7 @@ export async function renderNetWorth(container) {
               <i class="fas fa-search"></i>
               <input type="text" class="search-input" id="nw-search" placeholder="Search entries…" />
             </div>
-            <button class="btn-icon" id="nw-refresh-btn" title="Refresh">
+            <button type="button" class="btn-icon" id="nw-refresh-btn" title="Refresh" aria-label="Refresh">
               <i class="fas fa-rotate-right"></i>
             </button>
           </div>
@@ -104,12 +103,10 @@ export async function renderNetWorth(container) {
     </div>
 
     <!-- FAB -->
-    <button class="fab" id="nw-fab" title="Add snapshot">
+    <button type="button" class="fab" id="nw-fab" title="Add snapshot" aria-label="Add snapshot">
       <i class="fas fa-plus"></i>
     </button>
   `;
-
-  applyChartDefaults();
 
   // Chart toggles
   document.getElementById('nw-line-btn').addEventListener('click', () => {
@@ -173,27 +170,39 @@ function renderKPIs() {
   const latest = entries[entries.length - 1];
   const prev = entries[entries.length - 2];
 
-  const calc = (e) => {
-    if (!e) return { assets: 0, liabilities: 0, net: 0, liquid: 0 };
-    const assets = (e.stocks||0)+(e.mutual_funds||0)+(e.cash||0)+(e.epf||0)+(e.gold||0)+(e.fds||0);
-    const liabilities = e.credit_cards || 0;
-    const liquid = (e.stocks||0)+(e.mutual_funds||0)+(e.cash||0);
-    return { assets, liabilities, net: assets - liabilities, liquid };
+  const cur = {
+    assets:      computeAssets(latest),
+    liabilities: latest?.credit_cards || 0,
+    net:         computeNet(latest),
+    liquid:      computeLiquid(latest),
+  };
+  const prv = {
+    assets:      computeAssets(prev),
+    liabilities: prev?.credit_cards || 0,
+    net:         computeNet(prev),
+    liquid:      computeLiquid(prev),
   };
 
-  const cur = calc(latest);
-  const prv = calc(prev);
-
-  const nwChange = prv.net > 0 ? ((cur.net - prv.net) / Math.abs(prv.net)) * 100 : 0;
+  const nwChange = prv.net !== 0 ? ((cur.net - prv.net) / Math.abs(prv.net)) * 100 : 0;
   const nwChangeLabel = prev
     ? `${nwChange >= 0 ? '↑' : '↓'} ${Math.abs(nwChange).toFixed(1)}% from last`
     : 'First snapshot';
 
+  const monthlyExpenses = settings.get('monthly_expenses');
+  const runwayTarget    = settings.get('emergency_runway_target');
+  const solvencyTarget  = settings.get('solvency_target');
+  const fiMultiplier    = settings.get('fi_multiplier');
+  const fiTarget        = settings.fiTarget();
+  const passiveYield    = settings.get('passive_income_yield') / 100;
+  const emergencyFund   = computeEmergencyFund(latest, settings.get('emergency_fund_basis'));
+
   const solvency = cur.liabilities > 0 ? (cur.assets / cur.liabilities) : null;
-  const passiveIncome = ((latest?.stocks||0) + (latest?.mutual_funds||0) + (latest?.fds||0)) * PASSIVE_INCOME_YIELD / 12;
-  const runway = USER_MONTHLY_EXPENSES > 0 ? cur.liquid / USER_MONTHLY_EXPENSES : 0;
-  const fiPct = (cur.net / FI_TARGET) * 100;
-  const wealthScore = (cur.net / ((USER_AGE * USER_MONTHLY_NET_INCOME * 12) / 10)).toFixed(2);
+  const passiveIncome = ((latest?.stocks || 0) + (latest?.mutual_funds || 0) + (latest?.fds || 0)) * passiveYield / 12;
+  const runway = monthlyExpenses > 0 ? emergencyFund / monthlyExpenses : 0;
+  const fiPct = fiTarget > 0 ? (cur.net / fiTarget) * 100 : 0;
+
+  const expectedWealth = (settings.get('age') * settings.get('monthly_net_income') * 12) / settings.get('wealth_score_divisor');
+  const wealthScore = expectedWealth > 0 ? (cur.net / expectedWealth).toFixed(2) : '—';
   const wealthLabel = parseFloat(wealthScore) >= 1 ? 'PAW 🏆' : 'UAW 📈';
 
   const kpis = [
@@ -215,29 +224,29 @@ function renderKPIs() {
       value: solvency !== null ? solvency.toFixed(2) + '×' : 'No Debt',
       raw: solvency?.toFixed(2) ?? 0,
       sub: cur.liabilities > 0 ? `Liabilities: ${formatINR(cur.liabilities)}` : 'Debt-free 🎉',
-      badge: solvency !== null ? { text: solvency > SOLVENCY_HEALTHY_TARGET ? 'Strong' : 'Watch it', type: solvency > SOLVENCY_HEALTHY_TARGET ? 'positive' : 'neutral' } : { text: 'Debt-free', type: 'positive' },
-      tooltip: `Assets ÷ Liabilities. Higher is better. > ${SOLVENCY_HEALTHY_TARGET}× is considered healthy.`,
+      badge: solvency !== null ? { text: solvency > solvencyTarget ? 'Strong' : 'Watch it', type: solvency > solvencyTarget ? 'positive' : 'neutral' } : { text: 'Debt-free', type: 'positive' },
+      tooltip: `Assets ÷ Liabilities. Higher is better. > ${solvencyTarget}× is considered healthy.`,
     },
     {
       id: 'kpi-passive', label: 'Est. Passive Income', icon: '💸', color: 'var(--purple-glow)', iconBg: 'rgba(167,139,250,0.1)',
       value: formatINR(passiveIncome) + '/mo', raw: passiveIncome.toFixed(0),
-      sub: `At 4.5% annual yield on investables`,
-      tooltip: '(Stocks + MFs + FDs) × 4.5% ÷ 12. Blended estimated monthly passive income.',
+      sub: `At ${(passiveYield * 100).toFixed(0)}% annual yield on investables`,
+      tooltip: `(Stocks + MFs + FDs) × ${(passiveYield * 100).toFixed(0)}% ÷ 12. Blended estimated monthly passive income.`,
     },
     {
-      id: 'kpi-runway', label: 'Emergency Runway', icon: '🛡️', color: runway >= EMERGENCY_RUNWAY_HEALTHY_TARGET ? 'var(--success-glow)' : 'var(--warning-glow)',
-      iconBg: runway >= EMERGENCY_RUNWAY_HEALTHY_TARGET ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)',
+      id: 'kpi-runway', label: 'Emergency Runway', icon: '🛡️', color: runway >= runwayTarget ? 'var(--success-glow)' : 'var(--warning-glow)',
+      iconBg: runway >= runwayTarget ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)',
       value: runway.toFixed(1) + ' months', raw: runway.toFixed(1),
-      badge: { text: runway >= EMERGENCY_RUNWAY_HEALTHY_TARGET ? '✓ Safe' : 'Build up', type: runway >= EMERGENCY_RUNWAY_HEALTHY_TARGET ? 'positive' : 'neutral' },
-      sub: `Liquid ÷ ₹${(USER_MONTHLY_EXPENSES/1000).toFixed(0)}k/mo baseline`,
-      tooltip: `Liquid assets ÷ monthly baseline expenses. Target: ≥ ${EMERGENCY_RUNWAY_HEALTHY_TARGET} months.`,
+      badge: { text: runway >= runwayTarget ? '✓ Safe' : 'Build up', type: runway >= runwayTarget ? 'positive' : 'neutral' },
+      sub: `${settings.get('emergency_fund_basis') === 'cash_like' ? 'Cash + FDs' : 'Liquid'} ÷ ₹${(monthlyExpenses/1000).toFixed(0)}k/mo baseline`,
+      tooltip: `Emergency fund ÷ monthly baseline expenses. Target: ≥ ${runwayTarget} months.`,
     },
     {
       id: 'kpi-fi', label: 'FI Progress', icon: '🎯', color: 'var(--pink-glow)', iconBg: 'rgba(244,114,182,0.1)',
       value: formatPercent(Math.min(fiPct, 100)), raw: fiPct.toFixed(1),
       sub: `Wealth Score: ${wealthScore} (${wealthLabel})`,
-      progress: Math.min(fiPct, 100),
-      tooltip: `25× rule: target ₹${(FI_TARGET/1e7).toFixed(2)}Cr. Wealth Score from "The Millionaire Next Door".`,
+      progress: Math.min(Math.max(fiPct, 0), 100),
+      tooltip: `${fiMultiplier}× rule: target ₹${(fiTarget/1e7).toFixed(2)}Cr. Wealth Score from "The Millionaire Next Door".`,
     },
   ];
 
@@ -245,20 +254,20 @@ function renderKPIs() {
   if (!grid) return;
 
   grid.innerHTML = kpis.map(k => `
-    <div class="kpi-card" id="${k.id}" style="--kpi-glow:${k.color}" title="${k.tooltip}">
+    <div class="kpi-card" id="${k.id}" style="--kpi-glow:${k.color}" title="${escapeHTML(k.tooltip)}">
       <div class="kpi-header">
-        <span class="kpi-label">${k.label}</span>
+        <span class="kpi-label">${escapeHTML(k.label)}</span>
         <div class="kpi-icon" style="background:${k.iconBg}">${k.icon}</div>
       </div>
-      <div class="kpi-value mono">${k.value}</div>
+      <div class="kpi-value mono">${escapeHTML(k.value)}</div>
       ${k.progress !== undefined ? `
         <div class="progress-wrap" style="margin:0.4rem 0">
           <div class="progress-bar" style="width:${k.progress}%"></div>
         </div>
       ` : ''}
       <div class="kpi-sub">
-        ${k.badge ? `<span class="kpi-badge ${k.badge.type}">${k.badge.text}</span> ` : ''}
-        ${k.sub}
+        ${k.badge ? `<span class="kpi-badge ${k.badge.type}">${escapeHTML(k.badge.text)}</span> ` : ''}
+        ${escapeHTML(k.sub)}
       </div>
     </div>
   `).join('');
@@ -276,13 +285,8 @@ function buildAccumulationChart(data, type) {
   if (!ctx || !data.length) return;
 
   const labels = data.map(e => e.date);
-  const nwData = data.map(e => {
-    const a = (e.stocks||0)+(e.mutual_funds||0)+(e.cash||0)+(e.epf||0)+(e.gold||0)+(e.fds||0);
-    return a - (e.credit_cards||0);
-  });
-  const assetsData = data.map(e =>
-    (e.stocks||0)+(e.mutual_funds||0)+(e.cash||0)+(e.epf||0)+(e.gold||0)+(e.fds||0)
-  );
+  const nwData = data.map(e => computeNet(e));
+  const assetsData = data.map(e => computeAssets(e));
 
   const gradient = ctx.getContext('2d').createLinearGradient(0,0,0,220);
   gradient.addColorStop(0, 'rgba(56,189,248,0.2)');
@@ -361,7 +365,7 @@ function buildAllocationChart(latest) {
       datasets: [{
         data: fields.map(f => latest[f.key] || 0),
         backgroundColor: fields.map(f => f.color),
-        borderColor: 'var(--bg-card)', borderWidth: 3, hoverOffset: 8,
+        borderColor: cssVar('--bg-card', '#1e293b'), borderWidth: 3, hoverOffset: 8,
       }]
     },
     options: {
@@ -381,7 +385,7 @@ function renderYearFilter() {
   const years = [...new Set(entries.map(e => e.date?.slice(0, 4)))].filter(Boolean).sort().reverse();
   const currentVal = select.value;
   select.innerHTML = '<option value="">All Years</option>' + 
-    years.map(y => `<option value="${y}">${y}</option>`).join('');
+    years.map(y => `<option value="${escapeHTML(y)}">${escapeHTML(y)}</option>`).join('');
   if (years.includes(currentVal)) {
     select.value = currentVal;
   } else {
@@ -407,8 +411,8 @@ function renderTable() {
   }
 
   const rows = [...filtered].reverse().map(e => {
-    const net = computeNet(e);
-    const assets = (e.stocks||0)+(e.mutual_funds||0)+(e.cash||0)+(e.epf||0)+(e.gold||0)+(e.fds||0);
+    const net    = computeNet(e);
+    const assets = computeAssets(e);
 
     // Find previous entry for change
     const idx = entries.indexOf(e);
@@ -425,11 +429,11 @@ function renderTable() {
       formatINR(e.credit_cards),
       formatINR(net),
       chgPct !== null
-        ? gridjs.html(`<span style="color:${chgPct >= 0 ? 'var(--success)' : 'var(--danger)'}">
+        ? gridHtml(`<span style="color:${chgPct >= 0 ? 'var(--success)' : 'var(--danger)'}">
             ${chgPct >= 0 ? '↑' : '↓'} ${Math.abs(chgPct).toFixed(1)}%
           </span>`)
         : '—',
-      gridjs.html(`
+      gridHtml(`
         <div style="display:flex;gap:0.35rem">
           <button class="btn-sm btn-accent" onclick="window.__nwEdit('${e.id}')">
             <i class="fas fa-pencil"></i>
@@ -442,7 +446,7 @@ function renderTable() {
     ];
   });
 
-  tableGrid = new gridjs.Grid({
+  tableGrid = new Grid({
     columns: [
       { name: 'Date', width: '100px' },
       { name: 'Stocks' },
@@ -474,9 +478,7 @@ function renderTable() {
   };
 }
 
-function computeNet(e) {
-  return (e.stocks||0)+(e.mutual_funds||0)+(e.cash||0)+(e.epf||0)+(e.gold||0)+(e.fds||0)-(e.credit_cards||0);
-}
+// Removed — use computeNet() from utils.js instead.
 
 // ── Form Modal ───────────────────────────────────────────
 function openEntryForm(entry = null) {
@@ -485,13 +487,13 @@ function openEntryForm(entry = null) {
 
   openModal(`
     <div class="modal-header">
-      <div class="modal-title">${title}</div>
+      <div class="modal-title">${escapeHTML(title)}</div>
       <button class="modal-close" id="nw-modal-close"><i class="fas fa-times"></i></button>
     </div>
     <div class="modal-body">
       <div class="form-group">
         <label class="form-label">Date</label>
-        <input type="date" class="form-input" id="nw-f-date" value="${entry?.date || todayISO()}" />
+        <input type="date" class="form-input" id="nw-f-date" value="${escapeHTML(entry?.date || todayISO())}" />
       </div>
 
       <div style="font-size:0.72rem;font-weight:700;color:var(--success);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.6rem;margin-top:0.4rem">
@@ -610,7 +612,9 @@ async function submitForm() {
 
   if (!payload.date) {
     showToast('Please select a date.', 'error');
-    btn.disabled = false; btn.textContent = 'Add Snapshot'; return;
+    btn.disabled = false;
+    btn.textContent = editingId ? 'Save Changes' : 'Add Snapshot';
+    return;
   }
 
   if (editingId) payload.id = editingId;
@@ -632,8 +636,8 @@ async function submitForm() {
 function exportCSV() {
   const headers = ['Date','Stocks','Mutual Funds','Cash','EPF','Gold','FDs','Credit Cards','Total Assets','Net Worth'];
   const rows = entries.map(e => {
-    const assets = (e.stocks||0)+(e.mutual_funds||0)+(e.cash||0)+(e.epf||0)+(e.gold||0)+(e.fds||0);
-    const net = assets - (e.credit_cards||0);
+    const assets = computeAssets(e);
+    const net    = computeNet(e);
     return [e.date, e.stocks||0, e.mutual_funds||0, e.cash||0, e.epf||0, e.gold||0, e.fds||0, e.credit_cards||0, assets, net];
   });
   downloadCSV(headers, rows, `net_worth_export_${todayISO()}.csv`);

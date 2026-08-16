@@ -1461,3 +1461,191 @@ input, select, textarea {
   .points-strip { flex-direction: column; gap: 0.75rem; }
   .points-strip-item { padding: 0 !important; border-right: none !important; }
 }
+
+/* ============================================================
+   Dashboard banners — error and empty states
+   ============================================================ */
+.dash-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.9rem 1.1rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+.dash-banner i { font-size: 1.1rem; flex-shrink: 0; }
+.dash-banner > div { flex: 1; min-width: 0; }
+.dash-banner-sub { color: var(--text-muted); font-size: 0.82rem; margin-top: 0.15rem; }
+.dash-banner--error { border-color: rgba(239, 68, 68, 0.35); }
+.dash-banner--error i { color: var(--danger); }
+.dash-banner--empty { border-color: rgba(56, 189, 248, 0.3); }
+.dash-banner--empty i { color: var(--accent); }
+
+/* ============================================================
+   FI Planner
+   ============================================================ */
+.fi-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+@media (max-width: 900px) { .fi-grid { grid-template-columns: 1fr; } }
+
+.fi-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.fi-toggle input { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+
+.fi-sliders { display: flex; flex-direction: column; gap: 1.1rem; }
+.fi-slider-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  margin-bottom: 0.4rem;
+}
+.fi-slider-head label { font-size: 0.82rem; color: var(--text-secondary); font-weight: 600; }
+.fi-slider-head span { font-size: 0.85rem; color: var(--accent); font-weight: 700; }
+.fi-slider input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+  height: 4px;
+}
+.fi-slider input[type="range"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+.fi-milestones { display: flex; flex-direction: column; }
+.fi-milestone {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.fi-milestone:last-child { border-bottom: none; }
+.fi-milestone-mark { color: var(--text-muted); font-size: 0.8rem; width: 1rem; text-align: center; }
+.fi-milestone.is-reached .fi-milestone-mark { color: var(--success); }
+.fi-milestone-body { flex: 1; min-width: 0; }
+.fi-milestone-label { font-size: 0.85rem; font-weight: 600; color: var(--text-primary); }
+.fi-milestone-amount { font-size: 0.78rem; color: var(--text-muted); }
+.fi-milestone-eta { font-size: 0.8rem; color: var(--text-secondary); white-space: nowrap; }
+
+/* ============================================================
+   Settings
+   ============================================================ */
+.settings-derived {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  padding: 1rem 1.2rem;
+  margin-bottom: 1.5rem;
+}
+.settings-derived-title {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-bottom: 0.75rem;
+}
+.settings-derived-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 1rem;
+}
+.sdi-label { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.15rem; }
+.sdi-value { font-size: 1rem; font-weight: 700; color: var(--accent); }
+
+.settings-group { margin-bottom: 2rem; }
+.settings-group-title {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+  color: var(--accent);
+  margin: 0 0 0.9rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.settings-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  gap: 1.1rem;
+}
+.settings-field-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+.settings-reset {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.settings-reset:hover { color: var(--accent); }
+.settings-footnote {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.6;
+  max-width: 44rem;
+}
+.settings-footnote code {
+  background: var(--bg-elevated);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+  font-size: 0.95em;
+}
+
+/* Nav items are <button> now — strip the UA styling the old <div> never had. */
+.sidebar-nav .nav-item {
+  appearance: none;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  width: 100%;
+}
+.sidebar-nav .nav-item:focus-visible,
+.kpi-card:focus-visible,
+.btn-sm:focus-visible,
+.btn-icon:focus-visible,
+.fab:focus-visible,
+.table-tab:focus-visible,
+.chart-toggle-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.fi-dirty {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.fi-dirty.is-unsaved { color: var(--warning); font-weight: 600; }

@@ -1,3 +1,5 @@
+import { Chart } from './vendor.js';
+
 // ======================================================
 // Formatting utilities
 // ======================================================
@@ -5,27 +7,27 @@
 export function formatINR(value, decimals = 0) {
   if (value === null || value === undefined || isNaN(value)) return '—';
   const abs = Math.abs(value);
+  // Sign goes in front of the ₹, not inside the number — "−₹1.20 Cr", not "₹-1.20 Cr".
+  const sign = value < 0 ? '−' : '';
   let formatted;
   if (abs >= 1e7) {
-    formatted = (value / 1e7).toFixed(2) + ' Cr';
+    formatted = (abs / 1e7).toFixed(2) + ' Cr';
   } else if (abs >= 1e5) {
-    formatted = (value / 1e5).toFixed(2) + ' L';
+    formatted = (abs / 1e5).toFixed(2) + ' L';
   } else if (abs >= 1000) {
-    formatted = (value / 1000).toFixed(1) + 'k';
+    formatted = (abs / 1000).toFixed(1) + 'k';
   } else {
-    formatted = value.toFixed(decimals);
+    formatted = abs.toFixed(decimals);
   }
-  return '₹' + formatted;
+  return sign + '₹' + formatted;
 }
 
 export function formatINRFull(value) {
   if (value === null || value === undefined || isNaN(value)) return '—';
-  return '₹' + Math.abs(value).toLocaleString('en-IN', { maximumFractionDigits: 0 });
-}
-
-export function formatPoints(value) {
-  if (value === null || value === undefined || isNaN(value)) return '—';
-  return parseFloat(value).toLocaleString('en-IN', { maximumFractionDigits: 0 }) + ' pts';
+  // Keep the sign. Math.abs() alone rendered a negative net worth as a healthy
+  // positive number — the worst possible way for this app to be wrong.
+  const sign = value < 0 ? '−' : '';
+  return sign + '₹' + Math.abs(value).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 }
 
 export function formatPercent(value, decimals = 1) {
@@ -39,14 +41,12 @@ export function formatDate(dateStr) {
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-export function formatMonthYear(dateStr) {
-  if (!dateStr) return '—';
-  const d = new Date(dateStr + '-01');
-  return d.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
-}
-
 export function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  // Local date, not UTC. toISOString() east of UTC returns yesterday's date
+  // for anyone opening the app before ~05:30 IST.
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 // ======================================================
@@ -118,6 +118,13 @@ export function showToast(message, type = 'success') {
 // ======================================================
 
 export function makeCopyable(cardEl, rawValue) {
+  if (!cardEl) return;
+  // Clickable, so it has to be reachable and operable from the keyboard too.
+  cardEl.tabIndex = 0;
+  cardEl.setAttribute('role', 'button');
+  cardEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); cardEl.click(); }
+  });
   cardEl.addEventListener('click', () => {
     navigator.clipboard.writeText(String(rawValue)).catch(() => {});
     cardEl.classList.add('copied');
@@ -183,11 +190,31 @@ export function parseNum(val) {
   return isNaN(n) ? 0 : n;
 }
 
-export function sign(value, prev) {
-  if (prev === 0 || prev === undefined) return '';
-  const pct = ((value - prev) / Math.abs(prev)) * 100;
-  const arrow = pct >= 0 ? '↑' : '↓';
-  return `${arrow} ${Math.abs(pct).toFixed(1)}%`;
+// ======================================================
+// HTML escaping
+//
+// Every view builds its markup with template strings and innerHTML, so any
+// database value dropped into one is executable unless it goes through here.
+// ======================================================
+
+const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+
+export function escapeHTML(value) {
+  if (value === null || value === undefined) return '';
+  return String(value).replace(/[&<>"']/g, ch => HTML_ESCAPES[ch]);
+}
+
+// ======================================================
+// Canvas colour resolution
+//
+// Chart.js paints to a canvas, where `var(--token)` never resolves — it
+// silently falls back and the styling is quietly lost. Read the token off the
+// document instead.
+// ======================================================
+
+export function cssVar(name, fallback = '#000000') {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
 }
 
 // ======================================================
@@ -203,3 +230,15 @@ export async function fetchEURtoINR(fallback = 110.0) {
     return fallback;
   }
 }
+
+// ======================================================
+// Net worth computations
+//
+// Moved to ./networth-math.js — pure and import-free, so the maths runs
+// (and is testable) outside a browser. Re-exported here so every existing
+// `from '../utils.js'` import keeps working unchanged.
+// ======================================================
+
+export {
+  computeAssets, computeLiquid, computeCashLike, computeEmergencyFund, computeNet,
+} from './networth-math.js';

@@ -1,0 +1,3 @@
+# SPA fallback. Routing is hash-based, so deep links already resolve, but this
+# keeps a stray /networth (or a mistyped path) on the app instead of a 404.
+/*    /index.html   200

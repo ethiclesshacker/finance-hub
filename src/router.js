@@ -8,7 +8,7 @@ export function registerRoute(id, renderFn) {
   routes[id] = renderFn;
 }
 
-const VALID_VIEWS = ['dashboard', 'networth', 'points'];
+const VALID_VIEWS = ['dashboard', 'networth', 'points', 'fi', 'settings'];
 const FALLBACK    = 'dashboard';
 
 /** Read the current hash and return the view ID it maps to. */
@@ -34,7 +34,11 @@ export function navigateTo(viewId) {
 function _render(viewId) {
   // Update nav active state
   document.querySelectorAll('.nav-item[data-view]').forEach(item => {
-    item.classList.toggle('active', item.dataset.view === viewId);
+    const isActive = item.dataset.view === viewId;
+    item.classList.toggle('active', isActive);
+    // Tell assistive tech which view is current, not just which one is blue.
+    if (isActive) item.setAttribute('aria-current', 'page');
+    else item.removeAttribute('aria-current');
   });
 
   const container = document.getElementById('view-container');

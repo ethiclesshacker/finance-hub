@@ -1,10 +1,21 @@
+import { Chart, Grid, gridHtml } from '../vendor.js';
 import { supabase, getCurrentUserId } from '../supabase.js';
-import { POINTS_PER_EUR, EUR_INR_FALLBACK, MULTIPLIER_OPTIONS, REDEMPTION_PARTNERS, CC_MILESTONE_TARGET, CC_REWARD_TARGET_RATE } from '../constants.js';
+import { EUR_INR_FALLBACK, MULTIPLIER_OPTIONS, REDEMPTION_PARTNERS } from '../constants.js';
+import * as settings from '../settings.js';
 import {
   formatINR, formatINRFull, formatPercent, formatDate, todayISO,
-  applyChartDefaults, destroyChart, makeCopyable, downloadCSV,
+  destroyChart, makeCopyable, downloadCSV, escapeHTML, cssVar,
   openModal, closeModal, showToast, parseNum, fetchEURtoINR, CHART_COLORS
 } from '../utils.js';
+
+/**
+ * Points on a transaction. Every field goes through parseNum — a single null
+ * amount or multiplier used to turn the entire KPI row into NaN.
+ */
+function calcPoints(t) {
+  if (t.points !== null && t.points !== undefined) return parseNum(t.points);
+  return parseNum(t.amount) * parseNum(t.multiplier) / 100;
+}
 
 let transactions = [];
 let redemptions = [];
@@ -53,7 +64,7 @@ export async function renderPoints(container) {
           <i class="fas fa-circle-notch fa-spin" style="font-size:0.6rem"></i>
           Loading FX…
         </span>
-        <button class="btn-sm btn-ghost" id="pt-export-btn">
+        <button type="button" class="btn-sm btn-ghost" id="pt-export-btn">
           <i class="fas fa-download"></i> Export CSV
         </button>
       </div>
@@ -78,8 +89,8 @@ export async function renderPoints(container) {
               <div class="chart-subtitle">Monthly points earned</div>
             </div>
             <div class="chart-toggle">
-              <button class="chart-toggle-btn" id="pt-line-btn">Line</button>
-              <button class="chart-toggle-btn active" id="pt-bar-btn">Bar</button>
+              <button type="button" class="chart-toggle-btn" id="pt-line-btn">Line</button>
+              <button type="button" class="chart-toggle-btn active" id="pt-bar-btn">Bar</button>
             </div>
           </div>
           <div class="chart-canvas-wrap">
@@ -103,10 +114,10 @@ export async function renderPoints(container) {
       <div class="table-section">
         <div class="table-toolbar">
           <div class="table-tabs">
-            <button class="table-tab active" id="tab-transactions">
+            <button type="button" class="table-tab active" id="tab-transactions">
               <i class="fas fa-receipt" style="margin-right:0.3rem"></i>Transactions
             </button>
-            <button class="table-tab" id="tab-redemptions">
+            <button type="button" class="table-tab" id="tab-redemptions">
               <i class="fas fa-plane-departure" style="margin-right:0.3rem"></i>Redemptions
             </button>
           </div>
@@ -116,7 +127,7 @@ export async function renderPoints(container) {
               <i class="fas fa-search"></i>
               <input type="text" class="search-input" id="pt-search" placeholder="Search…" />
             </div>
-            <button class="btn-icon" id="pt-refresh-btn" title="Refresh">
+            <button type="button" class="btn-icon" id="pt-refresh-btn" title="Refresh" aria-label="Refresh">
               <i class="fas fa-rotate-right"></i>
             </button>
           </div>
@@ -129,12 +140,10 @@ export async function renderPoints(container) {
     </div>
 
     <!-- FAB -->
-    <button class="fab" id="pt-fab" title="Add transaction / redemption">
+    <button type="button" class="fab" id="pt-fab" title="Add transaction / redemption" aria-label="Add transaction or redemption">
       <i class="fas fa-plus"></i>
     </button>
   `;
-
-  applyChartDefaults();
 
   // Chart toggles
   document.getElementById('pt-line-btn').addEventListener('click', () => {
@@ -180,6 +189,12 @@ async function loadData() {
     fetchEURtoINR(EUR_INR_FALLBACK),
   ]);
 
+  const failure = txRes.error || rdRes.error;
+  if (failure) {
+    showToast('Failed to load data: ' + failure.message, 'error');
+    return;
+  }
+
   transactions = txRes.data || [];
   redemptions  = rdRes.data || [];
   eurRate = rate;
@@ -198,24 +213,23 @@ async function loadData() {
 
 // ── KPI Cards ──────────────────────────────────────────
 function renderKPIs() {
-  const calcPoints = (t) => {
-    if (t.points !== null && t.points !== undefined) return parseFloat(t.points);
-    return parseFloat(t.amount) * parseFloat(t.multiplier) / 100;
-  };
+  const POINTS_PER_EUR        = settings.get('points_per_eur');
+  const CC_MILESTONE_TARGET   = settings.get('cc_milestone_target');
+  const CC_REWARD_TARGET_RATE = settings.get('cc_reward_target_rate');
 
   const totalAccrued  = transactions.reduce((s, t) => s + calcPoints(t), 0);
-  const totalRedeemed = redemptions.reduce((s, r) => s + parseFloat(r.points_redeemed || 0), 0);
+  const totalRedeemed = redemptions.reduce((s, r) => s + parseNum(r.points_redeemed), 0);
   const balance = totalAccrued - totalRedeemed;
-  const balanceEUR = balance / POINTS_PER_EUR;
+  const balanceEUR = POINTS_PER_EUR > 0 ? balance / POINTS_PER_EUR : 0;
   const balanceINR = balanceEUR * eurRate;
 
-  const totalSpent = transactions.reduce((s, t) => s + parseFloat(t.amount || 0), 0);
-  const totalRdValue = redemptions.reduce((s, r) => s + parseFloat(r.value_amount || 0), 0);
+  const totalSpent = transactions.reduce((s, t) => s + parseNum(t.amount), 0);
+  const totalRdValue = redemptions.reduce((s, r) => s + parseNum(r.value_amount), 0);
   const rewardRate = totalSpent > 0 ? ((totalRdValue + balanceINR) / totalSpent) * 100 : 0;
   const avgVPP = totalRedeemed > 0 ? totalRdValue / totalRedeemed : 0;
 
   // Month accrual
-  const thisMonth = new Date().toISOString().slice(0, 7);
+  const thisMonth = todayISO().slice(0, 7);  // local month, not UTC
   const monthPts = transactions
     .filter(t => t.date?.slice(0,7) === thisMonth)
     .reduce((s, t) => s + calcPoints(t), 0);
@@ -223,12 +237,11 @@ function renderKPIs() {
   // Top merchant
   const merchantSpend = {};
   transactions.forEach(t => {
-    merchantSpend[t.merchant] = (merchantSpend[t.merchant] || 0) + parseFloat(t.amount || 0);
+    merchantSpend[t.merchant] = (merchantSpend[t.merchant] || 0) + parseNum(t.amount);
   });
-  const topMerchant = Object.entries(merchantSpend).sort((a,b) => b[1]-a[1])[0];
 
   const milestone = CC_MILESTONE_TARGET;
-  const progressPct = (totalSpent / milestone) * 100;
+  const progressPct = milestone > 0 ? (totalSpent / milestone) * 100 : 0;
   const remaining = Math.max(milestone - totalSpent, 0);
 
   const kpis = [
@@ -278,20 +291,20 @@ function renderKPIs() {
   if (!grid) return;
 
   grid.innerHTML = kpis.map(k => `
-    <div class="kpi-card" id="${k.id}" style="--kpi-glow:${k.color}" title="${k.tooltip}">
+    <div class="kpi-card" id="${k.id}" style="--kpi-glow:${k.color}" title="${escapeHTML(k.tooltip)}">
       <div class="kpi-header">
-        <span class="kpi-label">${k.label}</span>
+        <span class="kpi-label">${escapeHTML(k.label)}</span>
         <div class="kpi-icon" style="background:${k.iconBg}">${k.icon}</div>
       </div>
-      <div class="kpi-value mono">${k.value}</div>
+      <div class="kpi-value mono">${escapeHTML(k.value)}</div>
       ${k.progress !== undefined ? `
         <div class="progress-wrap" style="margin:0.4rem 0">
           <div class="progress-bar" style="width:${k.progress}%"></div>
         </div>
       ` : ''}
       <div class="kpi-sub">
-        ${k.badge ? `<span class="kpi-badge ${k.badge.type}">${k.badge.text}</span> ` : ''}
-        ${k.sub}
+        ${k.badge ? `<span class="kpi-badge ${k.badge.type}">${escapeHTML(k.badge.text)}</span> ` : ''}
+        ${escapeHTML(k.sub)}
       </div>
     </div>
   `).join('');
@@ -313,10 +326,7 @@ function buildAccumulationChart(txns, type) {
   txns.forEach(t => {
     const month = t.date?.slice(0, 7);
     if (!month) return;
-    const pts = t.points !== null && t.points !== undefined
-      ? parseFloat(t.points)
-      : parseFloat(t.amount) * parseFloat(t.multiplier) / 100;
-    monthly[month] = (monthly[month] || 0) + pts;
+    monthly[month] = (monthly[month] || 0) + calcPoints(t);
   });
 
   const sortedMonths = Object.keys(monthly).sort();
@@ -364,7 +374,7 @@ function buildMerchantChart(txns) {
 
   const spend = {};
   txns.forEach(t => {
-    spend[t.merchant] = (spend[t.merchant] || 0) + parseFloat(t.amount || 0);
+    spend[t.merchant] = (spend[t.merchant] || 0) + parseNum(t.amount);
   });
 
   const sorted = Object.entries(spend).sort((a,b) => b[1]-a[1]);
@@ -384,7 +394,7 @@ function buildMerchantChart(txns) {
       datasets: [{
         data: top6.map(([,v]) => v),
         backgroundColor: palette,
-        borderColor: 'var(--bg-card)', borderWidth: 3, hoverOffset: 8,
+        borderColor: cssVar('--bg-card', '#1e293b'), borderWidth: 3, hoverOffset: 8,
       }]
     },
     options: {
@@ -406,13 +416,13 @@ function renderTableFilters() {
     const merchants = [...new Set(transactions.map(t => t.merchant))].filter(Boolean).sort();
     
     container.innerHTML = `
-      <select id="pt-multiplier-filter" class="form-input" style="padding:0.35rem 0.5rem;font-size:0.8rem;height:36px;width:130px;border-radius:var(--radius-sm)">
+      <select id="pt-multiplier-filter" class="form-input" style="padding:0.35rem 0.5rem;font-size:0.8rem;height:36px;width:130px;border-radius:var(--radius-sm)" aria-label="Filter by multiplier">
         <option value="">All Multipliers</option>
-        ${multipliers.map(m => `<option value="${m}" ${filterMultiplier === String(m) ? 'selected' : ''}>${m}×</option>`).join('')}
+        ${multipliers.map(m => `<option value="${escapeHTML(m)}" ${filterMultiplier === String(m) ? 'selected' : ''}>${escapeHTML(m)}×</option>`).join('')}
       </select>
-      <select id="pt-merchant-filter" class="form-input" style="padding:0.35rem 0.5rem;font-size:0.8rem;height:36px;width:140px;border-radius:var(--radius-sm);max-width:180px">
+      <select id="pt-merchant-filter" class="form-input" style="padding:0.35rem 0.5rem;font-size:0.8rem;height:36px;width:140px;border-radius:var(--radius-sm);max-width:180px" aria-label="Filter by merchant">
         <option value="">All Merchants</option>
-        ${merchants.map(mer => `<option value="${mer}" ${filterMerchant === mer ? 'selected' : ''}>${mer}</option>`).join('')}
+        ${merchants.map(mer => `<option value="${escapeHTML(mer)}" ${filterMerchant === mer ? 'selected' : ''}>${escapeHTML(mer)}</option>`).join('')}
       </select>
     `;
     
@@ -428,9 +438,9 @@ function renderTableFilters() {
   } else {
     const partners = [...new Set(redemptions.map(r => r.partner))].filter(Boolean).sort();
     container.innerHTML = `
-      <select id="pt-partner-filter" class="form-input" style="padding:0.35rem 0.5rem;font-size:0.8rem;height:36px;width:140px;border-radius:var(--radius-sm)">
+      <select id="pt-partner-filter" class="form-input" style="padding:0.35rem 0.5rem;font-size:0.8rem;height:36px;width:140px;border-radius:var(--radius-sm)" aria-label="Filter by transfer partner">
         <option value="">All Partners</option>
-        ${partners.map(p => `<option value="${p}" ${filterPartner === p ? 'selected' : ''}>${p}</option>`).join('')}
+        ${partners.map(p => `<option value="${escapeHTML(p)}" ${filterPartner === p ? 'selected' : ''}>${escapeHTML(p)}</option>`).join('')}
       </select>
     `;
     document.getElementById('pt-partner-filter')?.addEventListener('change', e => {
@@ -455,10 +465,6 @@ function renderTxTable() {
   if (!container) return;
   if (txTableGrid) { try { txTableGrid.destroy(); } catch(_) {} }
 
-  const calcPoints = (t) => t.points !== null && t.points !== undefined
-    ? parseFloat(t.points)
-    : parseFloat(t.amount) * parseFloat(t.multiplier) / 100;
-
   let filtered = transactions;
   if (filterMultiplier) {
     filtered = filtered.filter(t => String(t.multiplier) === filterMultiplier);
@@ -480,10 +486,10 @@ function renderTxTable() {
       formatDate(t.date),
       t.merchant,
       t.description || '—',
-      gridjs.html(`<span style="font-weight:600">₹${parseFloat(t.amount||0).toLocaleString('en-IN')}</span>`),
-      gridjs.html(`<span class="badge ${getMultiplierBadgeClass(t.multiplier)}">${t.multiplier}×</span>`),
-      gridjs.html(`<span style="color:var(--success);font-weight:600">${Math.round(pts).toLocaleString('en-IN')} pts</span>`),
-      gridjs.html(`
+      gridHtml(`<span style="font-weight:600">₹${parseNum(t.amount).toLocaleString('en-IN')}</span>`),
+      gridHtml(`<span class="badge ${getMultiplierBadgeClass(t.multiplier)}">${escapeHTML(t.multiplier)}×</span>`),
+      gridHtml(`<span style="color:var(--success);font-weight:600">${Math.round(pts).toLocaleString('en-IN')} pts</span>`),
+      gridHtml(`
         <div style="display:flex;gap:0.35rem">
           <button class="btn-sm btn-accent" onclick="window.__ptTxEdit('${t.id}')">
             <i class="fas fa-pencil"></i>
@@ -496,7 +502,7 @@ function renderTxTable() {
     ];
   });
 
-  txTableGrid = new gridjs.Grid({
+  txTableGrid = new Grid({
     columns: ['Date','Merchant','Description','Amount','Multiplier','Points','Actions'],
     data: rows,
     pagination: { limit: 10 },
@@ -535,17 +541,16 @@ function renderRdTable() {
   }
 
   const rows = filtered.map(r => {
-    const vpp = parseFloat(r.points_redeemed || 1) > 0
-      ? parseFloat(r.value_amount || 0) / parseFloat(r.points_redeemed)
-      : 0;
+    const ptsRedeemed = parseNum(r.points_redeemed);
+    const vpp = ptsRedeemed > 0 ? parseNum(r.value_amount) / ptsRedeemed : 0;
     return [
       formatDate(r.date),
       r.partner,
       r.description || '—',
-      gridjs.html(`<span style="color:var(--danger);font-weight:600">${parseFloat(r.points_redeemed||0).toLocaleString('en-IN')} pts</span>`),
-      gridjs.html(`<span style="font-weight:600">₹${parseFloat(r.value_amount||0).toLocaleString('en-IN')}</span>`),
-      gridjs.html(`<span style="color:var(--success)">₹${vpp.toFixed(3)}/pt</span>`),
-      gridjs.html(`
+      gridHtml(`<span style="color:var(--danger);font-weight:600">${parseNum(r.points_redeemed).toLocaleString('en-IN')} pts</span>`),
+      gridHtml(`<span style="font-weight:600">₹${parseNum(r.value_amount).toLocaleString('en-IN')}</span>`),
+      gridHtml(`<span style="color:var(--success)">₹${vpp.toFixed(3)}/pt</span>`),
+      gridHtml(`
         <div style="display:flex;gap:0.35rem">
           <button class="btn-sm btn-accent" onclick="window.__ptRdEdit('${r.id}')">
             <i class="fas fa-pencil"></i>
@@ -558,7 +563,7 @@ function renderRdTable() {
     ];
   });
 
-  rdTableGrid = new gridjs.Grid({
+  rdTableGrid = new Grid({
     columns: ['Date','Partner','Description','Points','Value','Value/pt','Actions'],
     data: rows,
     pagination: { limit: 10 },
@@ -593,7 +598,7 @@ function openForm(data, type) {
     <div class="form-row">
       <div class="form-group">
         <label class="form-label">Date</label>
-        <input type="date" class="form-input" id="pt-f-date" value="${data?.date || todayISO()}" />
+        <input type="date" class="form-input" id="pt-f-date" value="${escapeHTML(data?.date || todayISO())}" />
       </div>
       <div class="form-group">
         <label class="form-label">Multiplier</label>
@@ -608,20 +613,20 @@ function openForm(data, type) {
     </div>
     <div class="form-group">
       <label class="form-label">Merchant</label>
-      <input type="text" class="form-input" id="pt-f-merchant" placeholder="e.g. Swiggy, Amazon, Zara" value="${data?.merchant || ''}" />
+      <input type="text" class="form-input" id="pt-f-merchant" placeholder="e.g. Swiggy, Amazon, Zara" value="${escapeHTML(data?.merchant || '')}" />
     </div>
     <div class="form-group">
       <label class="form-label">Description (optional)</label>
-      <input type="text" class="form-input" id="pt-f-desc" placeholder="Brief note" value="${data?.description || ''}" />
+      <input type="text" class="form-input" id="pt-f-desc" placeholder="Brief note" value="${escapeHTML(data?.description || '')}" />
     </div>
     <div class="form-row">
       <div class="form-group">
         <label class="form-label">Amount (₹)</label>
-        <input type="number" class="form-input" id="pt-f-amount" placeholder="0" min="0" step="0.01" value="${data?.amount || ''}" />
+        <input type="number" class="form-input" id="pt-f-amount" placeholder="0" min="0" step="0.01" value="${escapeHTML(data?.amount ?? '')}" />
       </div>
       <div class="form-group">
         <label class="form-label">Points Override</label>
-        <input type="number" class="form-input" id="pt-f-points" placeholder="Auto-calculated" min="0" value="${data?.points ?? ''}" />
+        <input type="number" class="form-input" id="pt-f-points" placeholder="Auto-calculated" min="0" value="${escapeHTML(data?.points ?? '')}" />
         <div class="form-hint">Leave blank to auto-calculate</div>
       </div>
     </div>
@@ -636,29 +641,29 @@ function openForm(data, type) {
     <div class="form-row">
       <div class="form-group">
         <label class="form-label">Date</label>
-        <input type="date" class="form-input" id="pt-f-date" value="${data?.date || todayISO()}" />
+        <input type="date" class="form-input" id="pt-f-date" value="${escapeHTML(data?.date || todayISO())}" />
       </div>
       <div class="form-group">
         <label class="form-label">Partner</label>
         <select class="form-select" id="pt-f-partner">
           ${REDEMPTION_PARTNERS.map(p => `
-            <option value="${p}" ${data?.partner === p ? 'selected' : ''}>${p}</option>
+            <option value="${escapeHTML(p)}" ${data?.partner === p ? 'selected' : ''}>${escapeHTML(p)}</option>
           `).join('')}
         </select>
       </div>
     </div>
     <div class="form-group">
       <label class="form-label">Description (optional)</label>
-      <input type="text" class="form-input" id="pt-f-desc" placeholder="e.g. Flight to NYC, Hotel in Bali" value="${data?.description || ''}" />
+      <input type="text" class="form-input" id="pt-f-desc" placeholder="e.g. Flight to NYC, Hotel in Bali" value="${escapeHTML(data?.description || '')}" />
     </div>
     <div class="form-row">
       <div class="form-group">
         <label class="form-label">Points Redeemed</label>
-        <input type="number" class="form-input" id="pt-f-pts-rd" placeholder="0" min="0" value="${data?.points_redeemed || ''}" />
+        <input type="number" class="form-input" id="pt-f-pts-rd" placeholder="0" min="0" value="${escapeHTML(data?.points_redeemed ?? '')}" />
       </div>
       <div class="form-group">
         <label class="form-label">Value Received (₹)</label>
-        <input type="number" class="form-input" id="pt-f-val" placeholder="0" min="0" step="0.01" value="${data?.value_amount || ''}" />
+        <input type="number" class="form-input" id="pt-f-val" placeholder="0" min="0" step="0.01" value="${escapeHTML(data?.value_amount ?? '')}" />
       </div>
     </div>
     <!-- VPP Preview -->
@@ -670,7 +675,7 @@ function openForm(data, type) {
 
   openModal(`
     <div class="modal-header">
-      <div class="modal-title">${title}</div>
+      <div class="modal-title">${escapeHTML(title)}</div>
       <button class="modal-close" id="pt-modal-close"><i class="fas fa-times"></i></button>
     </div>
     <div class="modal-tabs">
@@ -808,16 +813,14 @@ async function submitForm() {
 // ── Export ───────────────────────────────────────────────
 function exportCSV() {
   if (activeTab === 'transactions') {
-    const calcPoints = (t) => t.points !== null && t.points !== undefined
-      ? parseFloat(t.points)
-      : parseFloat(t.amount) * parseFloat(t.multiplier) / 100;
     const headers = ['Date','Merchant','Description','Amount (₹)','Multiplier','Points'];
     const rows = transactions.map(t => [t.date, t.merchant, t.description||'', t.amount, t.multiplier+'x', calcPoints(t).toFixed(0)]);
     downloadCSV(headers, rows, `cc_transactions_${todayISO()}.csv`);
   } else {
     const headers = ['Date','Partner','Description','Points Redeemed','Value (₹)','Value/pt (₹)'];
     const rows = redemptions.map(r => {
-      const vpp = parseFloat(r.points_redeemed||1) > 0 ? (parseFloat(r.value_amount||0)/parseFloat(r.points_redeemed)).toFixed(3) : '0';
+      const ptsRedeemed = parseNum(r.points_redeemed);
+      const vpp = ptsRedeemed > 0 ? (parseNum(r.value_amount) / ptsRedeemed).toFixed(3) : '0';
       return [r.date, r.partner, r.description||'', r.points_redeemed, r.value_amount, vpp];
     });
     downloadCSV(headers, rows, `cc_redemptions_${todayISO()}.csv`);

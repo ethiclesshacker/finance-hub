@@ -1,24 +1,29 @@
+import { Chart } from '../vendor.js';
 import { supabase } from '../supabase.js';
-import { USER_NAME, USER_MONTHLY_EXPENSES, FI_TARGET, POINTS_PER_EUR, EUR_INR_FALLBACK, EMERGENCY_RUNWAY_HEALTHY_TARGET, CC_REWARD_TARGET_RATE } from '../constants.js';
-import { formatINR, formatINRFull, formatPercent, applyChartDefaults, destroyChart, makeCopyable, fetchEURtoINR, CHART_COLORS, ASSET_COLORS } from '../utils.js';
+import { EUR_INR_FALLBACK } from '../constants.js';
+import * as settings from '../settings.js';
+import {
+  formatINR, formatINRFull, formatPercent, destroyChart, makeCopyable, fetchEURtoINR,
+  parseNum, escapeHTML, cssVar, CHART_COLORS, ASSET_COLORS,
+  computeNet, computeAssets, computeLiquid, computeEmergencyFund,
+} from '../utils.js';
+import { impliedSavingsRate } from '../finance.js';
 import { navigateTo } from '../router.js';
 
 let netWorthChart = null;
 let allocationChart = null;
 let netWorthData = [];
+let clockTimer = null;
 
 export async function renderDashboard(container) {
-  const now = new Date();
-  const dateStr = now.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-
   container.innerHTML = `
     <div class="page-body" style="padding-top:1.5rem">
 
       <!-- Compact hero header: greeting left, net worth right -->
       <div class="dash-header">
         <div class="dash-left">
-          <div class="dash-greeting">Good ${getGreeting()}, ${USER_NAME} 👋</div>
-          <div class="dash-date">${dateStr}</div>
+          <div class="dash-greeting" id="dash-greeting"></div>
+          <div class="dash-date" id="dash-date"></div>
         </div>
         <div class="dash-nw-stat">
           <div class="dash-nw-label">Net Worth</div>
@@ -27,7 +32,9 @@ export async function renderDashboard(container) {
         </div>
       </div>
 
-      <!-- 4 KPIs — all distinct, no net worth repeat -->
+      <div id="dash-alert"></div>
+
+      <!-- KPIs -->
       <div class="kpi-grid" id="dashboard-kpis">
         ${Array(4).fill(0).map(() => `
           <div class="kpi-card">
@@ -45,8 +52,8 @@ export async function renderDashboard(container) {
               <div class="chart-subtitle">Net worth over time</div>
             </div>
             <div class="chart-toggle">
-              <button class="chart-toggle-btn active" id="nw-chart-line">Line</button>
-              <button class="chart-toggle-btn" id="nw-chart-bar">Bar</button>
+              <button type="button" class="chart-toggle-btn active" id="nw-chart-line">Line</button>
+              <button type="button" class="chart-toggle-btn" id="nw-chart-bar">Bar</button>
             </div>
           </div>
           <div class="chart-canvas-wrap">
@@ -66,16 +73,16 @@ export async function renderDashboard(container) {
         </div>
       </div>
 
-      <!-- Points strip — inline stats, no nested cards -->
+      <!-- Points strip -->
       <div class="chart-card" style="margin-top:1rem">
         <div class="chart-header" style="margin-bottom:0">
           <div>
-            <div class="chart-title">Points & Rewards
+            <div class="chart-title">Points &amp; Rewards
               <span id="fx-badge" style="font-size:0.7rem;font-weight:500;color:var(--text-muted);margin-left:0.5rem">·</span>
             </div>
             <div class="chart-subtitle">HSBC TravelOne</div>
           </div>
-          <button class="btn-sm btn-accent" id="dash-goto-points">
+          <button type="button" class="btn-sm btn-accent" id="dash-goto-points">
             View Details <i class="fas fa-arrow-right" style="font-size:0.7rem"></i>
           </button>
         </div>
@@ -91,9 +98,12 @@ export async function renderDashboard(container) {
     </div>
   `;
 
-  applyChartDefaults();
+  // The greeting and date used to be baked in at render time, so a tab left
+  // open overnight kept saying "Good evening" and showing yesterday's date.
+  updateClock();
+  clearInterval(clockTimer);
+  clockTimer = setInterval(updateClock, 60_000);
 
-  // Chart toggles
   document.getElementById('nw-chart-line')?.addEventListener('click', () => {
     document.getElementById('nw-chart-line').classList.add('active');
     document.getElementById('nw-chart-bar').classList.remove('active');
@@ -110,6 +120,60 @@ export async function renderDashboard(container) {
   await loadDashboardData();
 }
 
+function updateClock() {
+  const now = new Date();
+  const h = now.getHours();
+  const greeting = h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening';
+
+  const greetEl = document.getElementById('dash-greeting');
+  const dateEl  = document.getElementById('dash-date');
+  if (!greetEl || !dateEl) { clearInterval(clockTimer); return; }
+
+  const name = settings.get('display_name');
+  greetEl.textContent = name ? `Good ${greeting}, ${name} 👋` : `Good ${greeting} 👋`;
+  dateEl.textContent  = now.toLocaleDateString('en-IN', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+  });
+}
+
+/** Points on a transaction, guarding every field. */
+function calcPoints(t) {
+  if (t.points !== null && t.points !== undefined) return parseNum(t.points);
+  return parseNum(t.amount) * parseNum(t.multiplier) / 100;
+}
+
+function showAlert(message) {
+  const el = document.getElementById('dash-alert');
+  if (!el) return;
+  el.innerHTML = `
+    <div class="dash-banner dash-banner--error" role="alert">
+      <i class="fas fa-triangle-exclamation"></i>
+      <div>
+        <strong>Couldn't load your data.</strong>
+        <div class="dash-banner-sub">${escapeHTML(message)}</div>
+      </div>
+      <button type="button" class="btn-sm btn-ghost" id="dash-retry">Retry</button>
+    </div>
+  `;
+  document.getElementById('dash-retry')?.addEventListener('click', () => loadDashboardData());
+}
+
+function showEmptyState() {
+  const el = document.getElementById('dash-alert');
+  if (!el) return;
+  el.innerHTML = `
+    <div class="dash-banner dash-banner--empty">
+      <i class="fas fa-seedling"></i>
+      <div>
+        <strong>No snapshots yet.</strong>
+        <div class="dash-banner-sub">Add your first net worth snapshot and the dashboard fills in.</div>
+      </div>
+      <button type="button" class="btn-sm btn-accent" id="dash-goto-nw">Add snapshot</button>
+    </div>
+  `;
+  document.getElementById('dash-goto-nw')?.addEventListener('click', () => navigateTo('networth'));
+}
+
 async function loadDashboardData() {
   const [nwRes, txRes, rdRes, eurRate] = await Promise.all([
     supabase.from('net_worth_entries').select('*').order('date', { ascending: true }),
@@ -118,108 +182,128 @@ async function loadDashboardData() {
     fetchEURtoINR(EUR_INR_FALLBACK),
   ]);
 
-  const entries     = nwRes.data || [];
+  // A failed query used to be swallowed by `?.data || []`, so a network drop or
+  // a denied RLS policy rendered a confident, well-formatted net worth of ₹0.
+  const failure = nwRes.error || txRes.error || rdRes.error;
+  if (failure) {
+    showAlert(failure.message);
+    return;
+  }
+
+  const entries      = nwRes.data || [];
   const transactions = txRes.data || [];
   const redemptions  = rdRes.data || [];
   netWorthData = entries;
+
+  const alertEl = document.getElementById('dash-alert');
+  if (alertEl) alertEl.innerHTML = '';
+  if (!entries.length) showEmptyState();
 
   // ── Net Worth ─────────────────────────────────────────
   const latest = entries[entries.length - 1];
   const prev   = entries[entries.length - 2];
 
-  const sum = (e) => e
-    ? (e.stocks||0)+(e.mutual_funds||0)+(e.cash||0)+(e.epf||0)+(e.gold||0)+(e.fds||0)-(e.credit_cards||0)
-    : 0;
-  const assets = (e) => e
-    ? (e.stocks||0)+(e.mutual_funds||0)+(e.cash||0)+(e.epf||0)+(e.gold||0)+(e.fds||0)
-    : 0;
-  const liquid = (e) => e ? (e.stocks||0)+(e.mutual_funds||0)+(e.cash||0) : 0;
+  const netWorth    = computeNet(latest);
+  const prevNW      = computeNet(prev);
+  const nwChange    = prevNW !== 0 ? ((netWorth - prevNW) / Math.abs(prevNW)) * 100 : 0;
+  const totalAssets = computeAssets(latest);
 
-  const netWorth  = sum(latest);
-  const prevNW    = sum(prev);
-  const nwChange  = prevNW ? ((netWorth - prevNW) / Math.abs(prevNW)) * 100 : 0;
-  const totalAssets = assets(latest);
-
-  // Hero net worth
-  const heroEl  = document.getElementById('hero-net-worth');
+  const heroEl   = document.getElementById('hero-net-worth');
   const changeEl = document.getElementById('hero-nw-change');
-  if (heroEl) heroEl.textContent = formatINRFull(netWorth);
+  if (heroEl) heroEl.textContent = entries.length ? formatINRFull(netWorth) : '—';
   if (changeEl && prev) {
     const isPos = nwChange >= 0;
     changeEl.innerHTML = `<span style="color:${isPos ? 'var(--success)' : 'var(--danger)'}">${isPos ? '↑' : '↓'} ${Math.abs(nwChange).toFixed(1)}%</span> from last snapshot`;
   } else if (changeEl) {
-    changeEl.textContent = 'First snapshot';
+    changeEl.textContent = entries.length ? 'First snapshot' : 'No data yet';
   }
 
   // ── Points ────────────────────────────────────────────
-  const calcPoints = (t) => t.points != null ? parseFloat(t.points) : parseFloat(t.amount) * parseFloat(t.multiplier) / 100;
+  const pointsPerEur  = settings.get('points_per_eur');
   const totalAccrued  = transactions.reduce((s, t) => s + calcPoints(t), 0);
-  const totalRedeemed = redemptions.reduce((s, r) => s + parseFloat(r.points_redeemed || 0), 0);
+  const totalRedeemed = redemptions.reduce((s, r) => s + parseNum(r.points_redeemed), 0);
   const balance       = totalAccrued - totalRedeemed;
-  const balanceINR    = (balance / POINTS_PER_EUR) * eurRate;
-  const totalSpent    = transactions.reduce((s, t) => s + parseFloat(t.amount || 0), 0);
-  const rdValue       = redemptions.reduce((s, r) => s + parseFloat(r.value_amount || 0), 0);
+  const balanceINR    = pointsPerEur > 0 ? (balance / pointsPerEur) * eurRate : 0;
+  const totalSpent    = transactions.reduce((s, t) => s + parseNum(t.amount), 0);
+  const rdValue       = redemptions.reduce((s, r) => s + parseNum(r.value_amount), 0);
   const rewardRate    = totalSpent > 0 ? ((rdValue + balanceINR) / totalSpent) * 100 : 0;
+  const rewardTarget  = settings.get('cc_reward_target_rate');
 
-  // FX badge
   const fxBadge = document.getElementById('fx-badge');
   if (fxBadge) fxBadge.textContent = `· 1 EUR = ₹${eurRate.toFixed(0)}`;
 
-  // ── 4 KPI Cards ───────────────────────────────────────
-  const fiPct = Math.min((netWorth / FI_TARGET) * 100, 100);
-  const runway = USER_MONTHLY_EXPENSES > 0 ? liquid(latest) / USER_MONTHLY_EXPENSES : 0;
+  // ── KPIs ──────────────────────────────────────────────
+  const fiTarget      = settings.fiTarget();
+  const monthlyExp    = settings.get('monthly_expenses');
+  const runwayTarget  = settings.get('emergency_runway_target');
+  const basis         = settings.get('emergency_fund_basis');
+  const fiPct         = fiTarget > 0 ? Math.min((netWorth / fiTarget) * 100, 100) : 0;
+  const emergencyFund = computeEmergencyFund(latest, basis);
+  const runway        = monthlyExp > 0 ? emergencyFund / monthlyExp : 0;
+  const runwayOK      = runway >= runwayTarget;
+
+  const savings = impliedSavingsRate(entries, settings.get('monthly_net_income'), 12);
+  const budgetRate = settings.budgetedSavingsRate();
 
   const kpis = [
     {
       id: 'dk-assets', label: 'Total Assets', icon: '🏦',
       iconBg: 'rgba(16,185,129,0.1)', glow: 'var(--success-glow)',
       value: formatINRFull(totalAssets), raw: totalAssets,
-      sub: `Liquid: ${formatINR(liquid(latest))}`,
+      sub: `Liquid: ${formatINR(computeLiquid(latest))}`,
       tooltip: 'Sum of all asset classes in your latest snapshot.',
+    },
+    {
+      id: 'dk-savings', label: 'Savings Rate', icon: '📈',
+      iconBg: 'rgba(56,189,248,0.1)', glow: 'var(--accent-glow)',
+      value: savings ? formatPercent(savings.rate) : '—',
+      raw: savings ? savings.rate.toFixed(1) : 0,
+      progress: savings ? Math.max(0, Math.min(savings.rate, 100)) : undefined,
+      badge: savings
+        ? { text: savings.rate >= budgetRate ? 'On track' : 'Below budget',
+            type: savings.rate >= budgetRate ? 'positive' : 'neutral' }
+        : null,
+      sub: savings
+        ? `${formatINR(savings.perMonth)}/mo over ${savings.months.toFixed(0)} months`
+        : 'Needs two snapshots',
+      tooltip: `Net worth growth ÷ income over the last 12 months. Includes investment returns, so it moves with the market. Budgeted rate: ${budgetRate.toFixed(0)}%.`,
     },
     {
       id: 'dk-fi', label: 'FI Progress', icon: '🎯',
       iconBg: 'rgba(167,139,250,0.1)', glow: 'var(--purple-glow)',
       value: formatPercent(fiPct), raw: fiPct.toFixed(1),
-      sub: `Target ${formatINR(FI_TARGET)}`,
+      sub: `Target ${formatINR(fiTarget)}`,
       progress: fiPct,
-      tooltip: '25× rule FIRE target. Target = 25 × annual expenses.',
-    },
-    {
-      id: 'dk-points', label: 'Points Balance', icon: '✈️',
-      iconBg: 'rgba(245,158,11,0.1)', glow: 'var(--warning-glow)',
-      value: Math.round(balance).toLocaleString('en-IN') + ' pts', raw: Math.round(balance),
-      sub: `≈ ${formatINRFull(balanceINR)}`,
-      tooltip: 'HSBC TravelOne live balance valued in INR.',
+      tooltip: `${settings.get('fi_multiplier')}× rule FIRE target. Target = ${settings.get('fi_multiplier')} × annual expenses.`,
     },
     {
       id: 'dk-runway', label: 'Emergency Runway', icon: '🛡️',
-      iconBg: runway >= EMERGENCY_RUNWAY_HEALTHY_TARGET ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)',
-      glow: runway >= EMERGENCY_RUNWAY_HEALTHY_TARGET ? 'var(--success-glow)' : 'var(--warning-glow)',
+      iconBg: runwayOK ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)',
+      glow: runwayOK ? 'var(--success-glow)' : 'var(--warning-glow)',
       value: runway.toFixed(1) + ' months', raw: runway.toFixed(1),
-      badge: { text: runway >= EMERGENCY_RUNWAY_HEALTHY_TARGET ? 'Healthy' : 'Build up', type: runway >= EMERGENCY_RUNWAY_HEALTHY_TARGET ? 'positive' : 'neutral' },
-      sub: `Liquid ÷ ₹${(USER_MONTHLY_EXPENSES/1000).toFixed(0)}k/mo`,
-      tooltip: `Liquid assets ÷ monthly baseline expenses. Target ≥ ${EMERGENCY_RUNWAY_HEALTHY_TARGET} months.`,
+      badge: { text: runwayOK ? 'Healthy' : 'Build up', type: runwayOK ? 'positive' : 'neutral' },
+      sub: `${basis === 'cash_like' ? 'Cash + FDs' : 'Liquid'} ÷ ₹${(monthlyExp / 1000).toFixed(0)}k/mo`,
+      tooltip: `${basis === 'cash_like' ? 'Cash and fixed deposits' : 'Cash, stocks and mutual funds'} ÷ monthly baseline expenses. Target ≥ ${runwayTarget} months.`,
     },
   ];
 
   const kpiContainer = document.getElementById('dashboard-kpis');
   if (kpiContainer) {
     kpiContainer.innerHTML = kpis.map(k => `
-      <div class="kpi-card" id="${k.id}" style="--kpi-glow:${k.glow}" title="${k.tooltip}">
+      <div class="kpi-card" id="${k.id}" style="--kpi-glow:${k.glow}" title="${escapeHTML(k.tooltip)}">
         <div class="kpi-header">
-          <span class="kpi-label">${k.label}</span>
+          <span class="kpi-label">${escapeHTML(k.label)}</span>
           <div class="kpi-icon" style="background:${k.iconBg}">${k.icon}</div>
         </div>
-        <div class="kpi-value mono">${k.value}</div>
+        <div class="kpi-value mono">${escapeHTML(k.value)}</div>
         ${k.progress !== undefined ? `
           <div class="progress-wrap" style="margin:0.4rem 0">
             <div class="progress-bar" style="width:${k.progress}%"></div>
           </div>
         ` : ''}
         <div class="kpi-sub">
-          ${k.badge ? `<span class="kpi-badge ${k.badge.type}">${k.badge.text}</span> ` : ''}
-          ${k.sub}
+          ${k.badge ? `<span class="kpi-badge ${k.badge.type}">${escapeHTML(k.badge.text)}</span> ` : ''}
+          ${escapeHTML(k.sub)}
         </div>
       </div>
     `).join('');
@@ -246,27 +330,26 @@ async function loadDashboardData() {
       {
         label: 'Balance Value',
         value: formatINRFull(balanceINR),
-        sub: `${(balance / POINTS_PER_EUR).toFixed(0)} EUR`,
+        sub: `${pointsPerEur > 0 ? (balance / pointsPerEur).toFixed(0) : 0} EUR`,
         color: 'var(--accent)',
       },
       {
         label: 'Reward Rate',
         value: formatPercent(rewardRate),
-        sub: rewardRate >= CC_REWARD_TARGET_RATE ? `✓ Above ${CC_REWARD_TARGET_RATE}% target` : `Target: > ${CC_REWARD_TARGET_RATE}%`,
-        color: rewardRate >= CC_REWARD_TARGET_RATE ? 'var(--success)' : 'var(--warning)',
+        sub: rewardRate >= rewardTarget ? `✓ Above ${rewardTarget}% target` : `Target: > ${rewardTarget}%`,
+        color: rewardRate >= rewardTarget ? 'var(--success)' : 'var(--warning)',
       },
     ];
 
     strip.innerHTML = items.map((item, i) => `
       <div class="points-strip-item ${i < items.length - 1 ? 'has-divider' : ''}">
-        <div class="psi-label">${item.label}</div>
-        <div class="psi-value mono" style="color:${item.color}">${item.value}</div>
-        <div class="psi-sub">${item.sub}</div>
+        <div class="psi-label">${escapeHTML(item.label)}</div>
+        <div class="psi-value mono" style="color:${item.color}">${escapeHTML(item.value)}</div>
+        <div class="psi-sub">${escapeHTML(item.sub)}</div>
       </div>
     `).join('');
   }
 
-  // Charts
   buildNetWorthChart(entries, 'line');
   buildAllocationChart(latest);
 }
@@ -277,10 +360,7 @@ function buildNetWorthChart(entries, type = 'line') {
   if (!ctx || !entries.length) return;
 
   const labels = entries.map(e => e.date);
-  const data   = entries.map(e => {
-    const a = (e.stocks||0)+(e.mutual_funds||0)+(e.cash||0)+(e.epf||0)+(e.gold||0)+(e.fds||0);
-    return a - (e.credit_cards||0);
-  });
+  const data   = entries.map(e => computeNet(e));
 
   const gradient = ctx.getContext('2d').createLinearGradient(0, 0, 0, 220);
   gradient.addColorStop(0, 'rgba(56,189,248,0.22)');
@@ -312,9 +392,9 @@ function buildNetWorthChart(entries, type = 'line') {
           grid: { color: 'rgba(148,163,184,0.06)' },
           ticks: {
             callback: v => {
-              if (v >= 1e7) return '₹' + (v/1e7).toFixed(1) + 'Cr';
-              if (v >= 1e5) return '₹' + (v/1e5).toFixed(1) + 'L';
-              return '₹' + (v/1000).toFixed(0) + 'k';
+              if (Math.abs(v) >= 1e7) return '₹' + (v / 1e7).toFixed(1) + 'Cr';
+              if (Math.abs(v) >= 1e5) return '₹' + (v / 1e5).toFixed(1) + 'L';
+              return '₹' + (v / 1000).toFixed(0) + 'k';
             }
           }
         }
@@ -329,7 +409,7 @@ function buildAllocationChart(latest) {
   if (!ctx || !latest) return;
 
   const fields = [
-    { key: 'stocks',       label: 'Stocks',      color: ASSET_COLORS.stocks },
+    { key: 'stocks',       label: 'Stocks',       color: ASSET_COLORS.stocks },
     { key: 'mutual_funds', label: 'Mutual Funds', color: ASSET_COLORS.mutual_funds },
     { key: 'cash',         label: 'Cash',         color: ASSET_COLORS.cash },
     { key: 'epf',          label: 'EPF',          color: ASSET_COLORS.epf },
@@ -344,7 +424,9 @@ function buildAllocationChart(latest) {
       datasets: [{
         data: fields.map(f => latest[f.key] || 0),
         backgroundColor: fields.map(f => f.color),
-        borderColor: 'var(--bg-card)', borderWidth: 3, hoverOffset: 8,
+        // Resolved off the document — `var(--bg-card)` never resolves on a canvas.
+        borderColor: cssVar('--bg-card', '#1e293b'),
+        borderWidth: 3, hoverOffset: 8,
       }]
     },
     options: {
@@ -355,11 +437,4 @@ function buildAllocationChart(latest) {
       }
     }
   });
-}
-
-function getGreeting() {
-  const h = new Date().getHours();
-  if (h < 12) return 'morning';
-  if (h < 17) return 'afternoon';
-  return 'evening';
 }

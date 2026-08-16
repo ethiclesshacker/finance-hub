@@ -1,6 +1,22 @@
 import { supabase } from '../supabase.js';
 
-export function renderLogin() {
+/**
+ * Where Supabase should send the user back to after they click the magic link.
+ *
+ * Must be a bare origin with no fragment: the app uses a hash router, and
+ * Supabase appends the session as `#access_token=…`. Sending the full
+ * `window.location.href` (which carries `#dashboard`, `#points`, … after any
+ * sign-out) produced `…/#points#access_token=…`, which supabase-js cannot
+ * parse — the sign-in silently failed. See auth-callback.js.
+ *
+ * This value must also be listed verbatim under Supabase → Authentication →
+ * URL Configuration → Redirect URLs, or Supabase falls back to the Site URL.
+ */
+function redirectTarget() {
+  return new URL(import.meta.env.BASE_URL, window.location.origin).toString();
+}
+
+export function renderLogin({ error } = {}) {
   document.getElementById('app').innerHTML = `
     <div id="login-page">
       <div class="login-bg-orb orb1"></div>
@@ -33,7 +49,7 @@ export function renderLogin() {
           />
         </div>
 
-        <button class="btn-primary" id="magic-link-btn">
+        <button type="button" class="btn-primary" id="magic-link-btn">
           <i class="fas fa-paper-plane" style="margin-right:0.5rem"></i>
           Send Magic Link
         </button>
@@ -47,6 +63,10 @@ export function renderLogin() {
   const emailInput = document.getElementById('email-input');
   const status = document.getElementById('login-status');
 
+  // Report a failed callback (expired / already-used link) instead of just
+  // dropping the user back on a blank form with no explanation.
+  if (error) showStatus(error, 'error');
+
   async function handleLogin() {
     const email = emailInput.value.trim();
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -57,19 +77,26 @@ export function renderLogin() {
     btn.disabled = true;
     btn.innerHTML = '<i class="fas fa-spinner fa-spin" style="margin-right:0.5rem"></i>Sending...';
 
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: window.location.href }
-    });
+    let sendError = null;
+    try {
+      ({ error: sendError } = await supabase.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: redirectTarget() }
+      }));
+    } catch (e) {
+      // createClient throws on a missing URL/key, and the request itself can
+      // fail outright — without this the button just stuck on "Sending…".
+      sendError = e;
+    }
 
     btn.disabled = false;
     btn.innerHTML = '<i class="fas fa-paper-plane" style="margin-right:0.5rem"></i>Send Magic Link';
 
-    if (error) {
-      showStatus(`Error: ${error.message}`, 'error');
+    if (sendError) {
+      showStatus(`Error: ${sendError.message || 'Could not send the magic link. Please try again.'}`, 'error');
     } else {
       showStatus(
-        `✨ Magic link sent to <strong>${email}</strong>. Check your inbox and click the link to sign in.`,
+        `✨ Magic link sent to <strong>${escapeHTML(email)}</strong>. Check your inbox and click the link to sign in.`,
         'success'
       );
       emailInput.value = '';
@@ -83,4 +110,12 @@ export function renderLogin() {
     status.innerHTML = msg;
     status.className = `login-status ${type}`;
   }
+}
+
+// The email regex above still admits characters like `<`, so the address has to
+// be escaped before it goes back out through innerHTML.
+function escapeHTML(str) {
+  const el = document.createElement('div');
+  el.textContent = str;
+  return el.innerHTML;
 }

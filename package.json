@@ -6,12 +6,21 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test 'test/*.test.js'",
+    "deploy": "npm run build && wrangler pages deploy dist --project-name finance --branch main",
+    "deploy:preview": "npm run build && wrangler pages deploy dist --project-name finance --branch preview"
   },
   "devDependencies": {
     "vite": "^8.1.1"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.110.0"
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fortawesome/fontawesome-free": "^7.3.1",
+    "@supabase/supabase-js": "^2.110.0",
+    "chart.js": "^4.5.1",
+    "chartjs-adapter-date-fns": "^3.0.0",
+    "date-fns": "^4.4.0",
+    "gridjs": "^6.2.0"
   }
 }
