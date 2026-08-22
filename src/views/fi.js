@@ -4,6 +4,7 @@ import * as settings from '../settings.js';
 import {
   formatINR, formatINRFull, formatPercent, destroyChart, makeCopyable,
   escapeHTML, showToast, parseNum, CHART_COLORS, computeNet,
+  renderKpiCards,
 } from '../utils.js';
 import {
   impliedSavingsRate, monthsToTarget, projectSeries,
@@ -50,7 +51,7 @@ export async function renderFI(container) {
 
       <div class="kpi-grid kpi-grid--3col" id="fi-kpi-grid">
         ${Array(6).fill(0).map(() => `
-          <div class="kpi-card"><div class="skeleton" style="height:90px;border-radius:var(--radius-md)"></div></div>
+          <div class="kpi-card"><div class="skeleton skeleton--kpi"></div></div>
         `).join('')}
       </div>
 
@@ -65,7 +66,7 @@ export async function renderFI(container) {
             <span>Today's rupees</span>
           </label>
         </div>
-        <div class="chart-canvas-wrap" style="height:300px">
+        <div class="chart-canvas-wrap chart-card--tall">
           <canvas id="fi-projection-chart"></canvas>
         </div>
       </div>
@@ -272,9 +273,8 @@ function renderKPIs(m) {
 
   const kpis = [
     {
-      id: 'fi-k-rate', label: 'Savings Rate (actual)', icon: '📈',
-      glow: 'var(--accent-glow)', iconBg: 'rgba(56,189,248,0.1)',
-      value: observed ? formatPercent(observed.rate) : '—',
+      id: 'fi-k-rate', label: 'Actual savings rate', icon: 'fa-arrow-trend-up',
+      tone: 'accent', value: observed ? formatPercent(observed.rate) : '—',
       raw: observed ? observed.rate.toFixed(1) : 0,
       progress: observed ? Math.max(0, Math.min(observed.rate, 100)) : undefined,
       sub: observed
@@ -283,9 +283,8 @@ function renderKPIs(m) {
       tooltip: 'Net worth growth ÷ income over the last 12 months. Includes market returns, so it is not a pure contribution rate.',
     },
     {
-      id: 'fi-k-budget', label: 'Savings Rate (budgeted)', icon: '🧾',
-      glow: 'var(--success-glow)', iconBg: 'rgba(16,185,129,0.1)',
-      value: formatPercent(budgetRate), raw: budgetRate.toFixed(1),
+      id: 'fi-k-budget', label: 'Budgeted savings rate', icon: 'fa-receipt',
+      tone: 'success', value: formatPercent(budgetRate), raw: budgetRate.toFixed(1),
       badge: observed
         ? { text: observed.rate >= budgetRate ? 'Beating budget' : 'Behind budget',
             type: observed.rate >= budgetRate ? 'positive' : 'neutral' }
@@ -294,9 +293,8 @@ function renderKPIs(m) {
       tooltip: '(Income − expenses) ÷ income, straight from your settings. The rate you would hit with zero investment return.',
     },
     {
-      id: 'fi-k-time', label: 'Time to FI', icon: '⏳',
-      glow: 'var(--purple-glow)', iconBg: 'rgba(167,139,250,0.1)',
-      value: formatDuration(m.months),
+      id: 'fi-k-time', label: 'Time to FI', icon: 'fa-hourglass-half',
+      tone: 'purple', value: formatDuration(m.months),
       raw: m.months != null ? Math.round(m.months) : 0,
       sub: m.months != null
         ? `Around ${new Date(addMonthsISO(m.latest.date, m.months) + 'T00:00:00')
@@ -305,17 +303,15 @@ function renderKPIs(m) {
       tooltip: 'Months until the projected balance crosses your FI target, compounding monthly.',
     },
     {
-      id: 'fi-k-target', label: 'FI Target', icon: '🎯',
-      glow: 'var(--pink-glow)', iconBg: 'rgba(244,114,182,0.1)',
-      value: formatINRFull(m.target), raw: Math.round(m.target),
+      id: 'fi-k-target', label: 'FI target', icon: 'fa-bullseye',
+      tone: 'pink', value: formatINRFull(m.target), raw: Math.round(m.target),
       progress: Math.min(fiPct, 100),
       sub: `${formatPercent(fiPct)} there · ${scenario.multiplier}× ${formatINR(m.annualExp)}/yr`,
       tooltip: 'Annual expenses × the FI multiplier. At 25× that is the 4% safe-withdrawal rule.',
     },
     {
-      id: 'fi-k-coast', label: 'Coast FI Number', icon: '🪂',
-      glow: coastPct >= 100 ? 'var(--success-glow)' : 'var(--warning-glow)',
-      iconBg: coastPct >= 100 ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)',
+      id: 'fi-k-coast', label: 'Coast FI number', icon: 'fa-parachute-box',
+      tone: coastPct >= 100 ? 'success' : 'warning',
       value: formatINRFull(m.coast), raw: Math.round(m.coast),
       progress: Math.min(coastPct, 100),
       badge: { text: coastPct >= 100 ? 'Coasting' : `${formatPercent(coastPct)}`, type: coastPct >= 100 ? 'positive' : 'neutral' },
@@ -325,9 +321,8 @@ function renderKPIs(m) {
       tooltip: `What you'd need invested today to reach the FI target by age ${settings.get('retirement_age')} with no further contributions.`,
     },
     {
-      id: 'fi-k-passive', label: 'Est. Passive Income', icon: '💸',
-      glow: 'var(--teal-glow)', iconBg: 'rgba(45,212,191,0.1)',
-      value: formatINR(passive) + '/mo', raw: Math.round(passive),
+      id: 'fi-k-passive', label: 'Est. passive income', icon: 'fa-money-bill-wave',
+      tone: 'teal', value: formatINR(passive), unit: '/mo', raw: Math.round(passive),
       badge: {
         text: passive >= settings.get('monthly_expenses') ? 'Covers expenses' : `${formatPercent(settings.get('monthly_expenses') > 0 ? (passive / settings.get('monthly_expenses')) * 100 : 0)} of expenses`,
         type: passive >= settings.get('monthly_expenses') ? 'positive' : 'neutral',
@@ -340,25 +335,7 @@ function renderKPIs(m) {
   const grid = document.getElementById('fi-kpi-grid');
   if (!grid) return;
 
-  grid.innerHTML = kpis.map(k => `
-    <div class="kpi-card" id="${k.id}" style="--kpi-glow:${k.glow}" title="${escapeHTML(k.tooltip)}">
-      <div class="kpi-header">
-        <span class="kpi-label">${escapeHTML(k.label)}</span>
-        <div class="kpi-icon" style="background:${k.iconBg}">${k.icon}</div>
-      </div>
-      <div class="kpi-value mono">${escapeHTML(k.value)}</div>
-      ${k.progress !== undefined ? `
-        <div class="progress-wrap" style="margin:0.4rem 0">
-          <div class="progress-bar" style="width:${k.progress}%"></div>
-        </div>` : ''}
-      <div class="kpi-sub">
-        ${k.badge ? `<span class="kpi-badge ${k.badge.type}">${escapeHTML(k.badge.text)}</span> ` : ''}
-        ${escapeHTML(k.sub)}
-      </div>
-    </div>
-  `).join('');
-
-  kpis.forEach(k => makeCopyable(document.getElementById(k.id), k.raw));
+  renderKpiCards(grid, kpis);
 }
 
 function renderMilestones(m) {

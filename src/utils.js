@@ -133,6 +133,88 @@ export function makeCopyable(cardEl, rawValue) {
 }
 
 // ======================================================
+// KPI cards
+//
+// Four screens rendered this same card from four copies of the same template
+// string, which is how they drifted: one called the tint `glow` and another
+// called it `color`, the badge and the footnote ran together on one line, and
+// the progress bar carried its spacing in an inline style. One renderer now,
+// and one place to change the shape of a KPI.
+//
+// A card is: { id, label, icon, tone, value, unit, raw, sub, badge, progress,
+//              tooltip }
+//   tone     — a semantic name ('accent' | 'success' | 'warning' | 'danger' |
+//              'purple' | 'pink' | 'teal'). It drives both the icon wash and
+//              the hover glow, so a card cannot be tinted one colour and
+//              washed another, which is what happened when they were two
+//              separate hand-written values.
+//   unit     — 'months', '/mo', 'pts', '×'. Set apart from the figure rather
+//              than concatenated into it, so the number stays the number.
+//   progress — 0-100; omit entirely for a card with no meter.
+// ======================================================
+
+const KPI_TONES = ['accent', 'success', 'warning', 'danger', 'purple', 'pink', 'teal'];
+
+export function renderKpiCards(container, kpis) {
+  if (!container) return;
+
+  container.innerHTML = kpis.map(k => {
+    const tone = KPI_TONES.includes(k.tone) ? k.tone : 'accent';
+    return `
+    <div class="kpi-card" id="${escapeHTML(k.id)}"
+         style="--kpi-tint:var(--${tone});--kpi-glow:var(--${tone}-glow)"
+         title="${escapeHTML(k.tooltip || '')}">
+      <div class="kpi-header">
+        <span class="kpi-label">${escapeHTML(k.label)}</span>
+        <span class="kpi-icon" aria-hidden="true"><i class="fas ${escapeHTML(k.icon)}"></i></span>
+      </div>
+      <div class="kpi-value">${escapeHTML(k.value)}${
+        k.unit ? `<span class="kpi-unit">${escapeHTML(k.unit)}</span>` : ''}</div>
+      ${k.progress !== undefined && k.progress !== null ? `
+        <div class="progress-wrap kpi-meter">
+          <div class="progress-bar" style="width:${Math.max(0, Math.min(100, k.progress))}%"></div>
+        </div>` : ''}
+      <div class="kpi-sub">
+        ${k.badge ? `<span class="kpi-badge ${escapeHTML(k.badge.type)}">${escapeHTML(k.badge.text)}</span>` : ''}
+        ${k.sub ? `<span>${escapeHTML(k.sub)}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  kpis.forEach(k => makeCopyable(container.querySelector('#' + CSS.escape(k.id)), k.raw));
+}
+
+// ======================================================
+// Table cells
+//
+// A column of money is read by comparing figures down it, which needs three
+// things the tables were not doing: one decimal convention, tabular digits,
+// and right alignment. The Amount column showed "₹760", "₹879.4" and
+// "₹10,168.64" side by side, because toLocaleString with no options keeps up
+// to three fraction digits — so the same column had three different shapes.
+// ======================================================
+
+/** A right-aligned numeric table cell. `tone` is a semantic token name. */
+export function numCell(text, { tone, bold = false } = {}) {
+  const style = [
+    tone ? `color:var(--${tone})` : '',
+    bold ? 'font-weight:600' : '',
+  ].filter(Boolean).join(';');
+  return `<span class="num"${style ? ` style="${style}"` : ''}>${escapeHTML(text)}</span>`;
+}
+
+/** Edit and delete for one row. Was four copies of the same inline flexbox. */
+export function rowActions(editCall, deleteCall, noun = 'row') {
+  return `
+    <div class="row-actions">
+      <button type="button" class="btn-icon" onclick="${editCall}"
+              title="Edit ${noun}" aria-label="Edit ${noun}"><i class="fas fa-pencil"></i></button>
+      <button type="button" class="btn-icon is-danger" onclick="${deleteCall}"
+              title="Delete ${noun}" aria-label="Delete ${noun}"><i class="fas fa-trash"></i></button>
+    </div>`;
+}
+
+// ======================================================
 // CSV Export
 // ======================================================
 

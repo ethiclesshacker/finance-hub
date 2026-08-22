@@ -9,6 +9,14 @@ import { renderFI } from './fi.js';
 import { renderSettings } from './settings.js';
 import { renderLedger } from './ledger.js';
 
+// Private-mode Safari throws on localStorage, and a thrown preference must
+// not take the navigation down with it.
+const RAIL_KEY = 'finance-hub-sidebar-rail';
+
+function isRailCollapsed() {
+  try { return localStorage.getItem(RAIL_KEY) === '1'; } catch (_) { return false; }
+}
+
 const NAV_ITEMS = [
   { id: 'dashboard', icon: 'fa-house',        label: 'Dashboard' },
   { id: 'networth',  icon: 'fa-chart-line',   label: 'Net Worth' },
@@ -37,8 +45,8 @@ export function renderApp(session) {
       <button type="button" class="hamburger" id="hamburger-btn" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">
         <i class="fas fa-bars"></i>
       </button>
-      <span style="font-weight:800;font-size:1rem;background:linear-gradient(135deg,var(--accent),var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">FinanceHub</span>
-      <div style="width:36px"></div>
+      <span class="mobile-header-title">FinanceHub</span>
+      <span class="mobile-header-spacer" aria-hidden="true"></span>
     </div>
 
     <div id="app-shell">
@@ -47,11 +55,20 @@ export function renderApp(session) {
 
       <!-- Sidebar -->
       <nav class="sidebar" id="sidebar" aria-label="Main">
+        <!-- Collapses the sidebar to an icon rail on desktop. Below the
+             breakpoint where the sidebar is a drawer there is nothing to
+             collapse, so the button is hidden there. -->
+        <button type="button" class="sidebar-toggle" id="sidebar-toggle"
+                aria-controls="sidebar" aria-expanded="true" title="Collapse sidebar">
+          <i class="fas fa-angles-left" aria-hidden="true"></i>
+          <span class="sr-only">Collapse sidebar</span>
+        </button>
+
         <div class="sidebar-logo">
-          <div class="sidebar-logo-icon">💰</div>
-          <div>
+          <div class="sidebar-logo-icon" aria-hidden="true"><i class="fas fa-wallet"></i></div>
+          <div class="sidebar-logo-names">
             <div class="sidebar-logo-text">FinanceHub</div>
-            <div class="sidebar-logo-sub">Personal Finance</div>
+            <div class="sidebar-logo-sub">Personal finance</div>
           </div>
         </div>
 
@@ -62,10 +79,11 @@ export function renderApp(session) {
               class="nav-item ${item.id === 'dashboard' ? 'active' : ''}"
               data-view="${item.id}"
               id="nav-${item.id}"
+              title="${escapeHTML(item.label)}"
               ${item.id === 'dashboard' ? 'aria-current="page"' : ''}
             >
               <i class="fas ${item.icon}" aria-hidden="true"></i>
-              ${escapeHTML(item.label)}
+              <span class="nav-item-label">${escapeHTML(item.label)}</span>
             </button>
           `).join('')}
         </div>
@@ -103,6 +121,26 @@ export function renderApp(session) {
   document.getElementById('sign-out-btn').addEventListener('click', async () => {
     await supabase.auth.signOut();
   });
+
+  // ── Sidebar rail ──────────────────────────────────────
+  //
+  // Collapsed state is per browser, not per account: it is a preference about
+  // this screen, so localStorage rather than user_settings — no round trip,
+  // and it is applied before the first paint of the next visit.
+  const shell        = document.getElementById('app-shell');
+  const railToggle   = document.getElementById('sidebar-toggle');
+
+  function setRail(collapsed) {
+    shell.classList.toggle('is-rail', collapsed);
+    railToggle.setAttribute('aria-expanded', String(!collapsed));
+    const label = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+    railToggle.title = label;
+    railToggle.querySelector('.sr-only').textContent = label;
+    try { localStorage.setItem(RAIL_KEY, collapsed ? '1' : '0'); } catch (_) {}
+  }
+
+  setRail(isRailCollapsed());
+  railToggle.addEventListener('click', () => setRail(!shell.classList.contains('is-rail')));
 
   // Mobile sidebar toggle
   const hamburger = document.getElementById('hamburger-btn');

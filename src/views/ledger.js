@@ -201,7 +201,7 @@ async function switchTab(tab) {
 
 async function loadData() {
   const container = document.getElementById('lg-timeline');
-  if (container) container.innerHTML = `<div class="skeleton" style="height:220px;border-radius:var(--radius-md)"></div>`;
+  if (container) container.innerHTML = `<div class="skeleton skeleton--table"></div>`;
 
   try {
     const [result, review, runs, written] = await Promise.all([
@@ -493,7 +493,7 @@ async function openDetail(eventId) {
       <div class="modal-title">Event</div>
       <button class="modal-close" id="lg-detail-close"><i class="fas fa-times"></i></button>
     </div>
-    <div class="modal-body"><div class="skeleton" style="height:260px;border-radius:var(--radius-md)"></div></div>
+    <div class="modal-body"><div class="skeleton skeleton--table"></div></div>
   `);
   document.getElementById('lg-detail-close').addEventListener('click', closeModal);
 
@@ -955,7 +955,7 @@ async function openMerge(event) {
       <div class="modal-title">Merge duplicates</div>
       <button class="modal-close" id="lg-merge-close"><i class="fas fa-times"></i></button>
     </div>
-    <div class="modal-body"><div class="skeleton" style="height:180px;border-radius:var(--radius-md)"></div></div>
+    <div class="modal-body"><div class="skeleton skeleton--strip"></div></div>
   `);
   document.getElementById('lg-merge-close').addEventListener('click', closeModal);
 

@@ -5,8 +5,16 @@ import {
   formatINR, formatINRFull, formatPercent, formatDate, todayISO,
   destroyChart, makeCopyable, downloadCSV, escapeHTML, cssVar,
   openModal, closeModal, showToast, parseNum, ASSET_COLORS, CHART_COLORS,
-  computeNet, computeAssets, computeLiquid, computeEmergencyFund
+  computeNet, computeAssets, computeLiquid, computeEmergencyFund, renderKpiCards,
+  numCell, rowActions,
 } from '../utils.js';
+
+// Applied to both the header and the body cells of a column, so a numeric
+// column is right-aligned end to end.
+// A data attribute, not a class: Grid.js writes `class` straight onto the
+// cell, replacing the gridjs-th / gridjs-td classes it needs to stay styled.
+const NUMERIC_COL = () => ({ 'data-align': 'end' });
+const ACTIONS_COL = () => ({ 'data-align': 'end' });
 
 let entries = [];
 let netWorthChartRef = null;
@@ -41,7 +49,7 @@ export async function renderNetWorth(container) {
       <div class="kpi-grid kpi-grid--3col" id="nw-kpi-grid">
         ${Array(6).fill(0).map(() => `
           <div class="kpi-card">
-            <div class="skeleton" style="height:90px;border-radius:var(--radius-md)"></div>
+            <div class="skeleton skeleton--kpi"></div>
           </div>
         `).join('')}
       </div>
@@ -70,7 +78,7 @@ export async function renderNetWorth(container) {
               <div class="chart-subtitle">Latest snapshot breakdown</div>
             </div>
           </div>
-          <div class="chart-canvas-wrap" style="height:220px">
+          <div class="chart-canvas-wrap">
             <canvas id="nw-allocation-chart"></canvas>
           </div>
         </div>
@@ -203,48 +211,44 @@ function renderKPIs() {
 
   const expectedWealth = (settings.get('age') * settings.get('monthly_net_income') * 12) / settings.get('wealth_score_divisor');
   const wealthScore = expectedWealth > 0 ? (cur.net / expectedWealth).toFixed(2) : '—';
-  const wealthLabel = parseFloat(wealthScore) >= 1 ? 'PAW 🏆' : 'UAW 📈';
+  // "PAW" and "UAW" are the book's terms, not the reader's. Say what they mean.
+  const wealthLabel = parseFloat(wealthScore) >= 1 ? 'ahead for your age' : 'behind for your age';
 
   const kpis = [
     {
-      id: 'kpi-nw', label: 'Net Worth', icon: '📊', color: 'var(--accent-glow)', iconBg: 'rgba(56,189,248,0.1)',
-      value: formatINRFull(cur.net), raw: cur.net,
+      id: 'kpi-nw', label: 'Net worth', icon: 'fa-chart-column', tone: 'accent', value: formatINRFull(cur.net), raw: cur.net,
       badge: { text: nwChange >= 0 ? `+${nwChange.toFixed(1)}%` : `${nwChange.toFixed(1)}%`, type: nwChange >= 0 ? 'positive' : 'negative' },
       sub: nwChangeLabel,
       tooltip: 'Total assets minus total liabilities at latest snapshot date.',
     },
     {
-      id: 'kpi-assets', label: 'Total Assets', icon: '🏦', color: 'var(--success-glow)', iconBg: 'rgba(16,185,129,0.1)',
-      value: formatINRFull(cur.assets), raw: cur.assets,
+      id: 'kpi-assets', label: 'Total assets', icon: 'fa-building-columns', tone: 'success', value: formatINRFull(cur.assets), raw: cur.assets,
       sub: `Liquid: ${formatINR(cur.liquid)}`,
       tooltip: 'Sum of all asset classes in latest snapshot.',
     },
     {
-      id: 'kpi-solvency', label: 'Solvency Ratio', icon: '⚖️', color: 'var(--warning-glow)', iconBg: 'rgba(245,158,11,0.1)',
-      value: solvency !== null ? solvency.toFixed(2) + '×' : 'No Debt',
+      id: 'kpi-solvency', label: 'Solvency ratio', icon: 'fa-scale-balanced', tone: 'warning', value: solvency !== null ? solvency.toFixed(2) : 'No debt',
+      unit: solvency !== null ? '×' : '',
       raw: solvency?.toFixed(2) ?? 0,
-      sub: cur.liabilities > 0 ? `Liabilities: ${formatINR(cur.liabilities)}` : 'Debt-free 🎉',
+      sub: cur.liabilities > 0 ? `Liabilities: ${formatINR(cur.liabilities)}` : 'No liabilities recorded',
       badge: solvency !== null ? { text: solvency > solvencyTarget ? 'Strong' : 'Watch it', type: solvency > solvencyTarget ? 'positive' : 'neutral' } : { text: 'Debt-free', type: 'positive' },
       tooltip: `Assets ÷ Liabilities. Higher is better. > ${solvencyTarget}× is considered healthy.`,
     },
     {
-      id: 'kpi-passive', label: 'Est. Passive Income', icon: '💸', color: 'var(--purple-glow)', iconBg: 'rgba(167,139,250,0.1)',
-      value: formatINR(passiveIncome) + '/mo', raw: passiveIncome.toFixed(0),
+      id: 'kpi-passive', label: 'Est. passive income', icon: 'fa-money-bill-wave', tone: 'purple', value: formatINR(passiveIncome), unit: '/mo', raw: passiveIncome.toFixed(0),
       sub: `At ${(passiveYield * 100).toFixed(0)}% annual yield on investables`,
       tooltip: `(Stocks + MFs + FDs) × ${(passiveYield * 100).toFixed(0)}% ÷ 12. Blended estimated monthly passive income.`,
     },
     {
-      id: 'kpi-runway', label: 'Emergency Runway', icon: '🛡️', color: runway >= runwayTarget ? 'var(--success-glow)' : 'var(--warning-glow)',
-      iconBg: runway >= runwayTarget ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)',
-      value: runway.toFixed(1) + ' months', raw: runway.toFixed(1),
-      badge: { text: runway >= runwayTarget ? '✓ Safe' : 'Build up', type: runway >= runwayTarget ? 'positive' : 'neutral' },
+      id: 'kpi-runway', label: 'Emergency runway', icon: 'fa-shield-halved', tone: runway >= runwayTarget ? 'success' : 'warning',
+      value: runway.toFixed(1), unit: 'months', raw: runway.toFixed(1),
+      badge: { text: runway >= runwayTarget ? 'Healthy' : 'Build up', type: runway >= runwayTarget ? 'positive' : 'neutral' },
       sub: `${settings.get('emergency_fund_basis') === 'cash_like' ? 'Cash + FDs' : 'Liquid'} ÷ ₹${(monthlyExpenses/1000).toFixed(0)}k/mo baseline`,
       tooltip: `Emergency fund ÷ monthly baseline expenses. Target: ≥ ${runwayTarget} months.`,
     },
     {
-      id: 'kpi-fi', label: 'FI Progress', icon: '🎯', color: 'var(--pink-glow)', iconBg: 'rgba(244,114,182,0.1)',
-      value: formatPercent(Math.min(fiPct, 100)), raw: fiPct.toFixed(1),
-      sub: `Wealth Score: ${wealthScore} (${wealthLabel})`,
+      id: 'kpi-fi', label: 'FI progress', icon: 'fa-bullseye', tone: 'pink', value: formatPercent(Math.min(fiPct, 100)), raw: fiPct.toFixed(1),
+      sub: `Wealth score ${wealthScore} — ${wealthLabel}`,
       progress: Math.min(Math.max(fiPct, 0), 100),
       tooltip: `${fiMultiplier}× rule: target ₹${(fiTarget/1e7).toFixed(2)}Cr. Wealth Score from "The Millionaire Next Door".`,
     },
@@ -253,29 +257,7 @@ function renderKPIs() {
   const grid = document.getElementById('nw-kpi-grid');
   if (!grid) return;
 
-  grid.innerHTML = kpis.map(k => `
-    <div class="kpi-card" id="${k.id}" style="--kpi-glow:${k.color}" title="${escapeHTML(k.tooltip)}">
-      <div class="kpi-header">
-        <span class="kpi-label">${escapeHTML(k.label)}</span>
-        <div class="kpi-icon" style="background:${k.iconBg}">${k.icon}</div>
-      </div>
-      <div class="kpi-value mono">${escapeHTML(k.value)}</div>
-      ${k.progress !== undefined ? `
-        <div class="progress-wrap" style="margin:0.4rem 0">
-          <div class="progress-bar" style="width:${k.progress}%"></div>
-        </div>
-      ` : ''}
-      <div class="kpi-sub">
-        ${k.badge ? `<span class="kpi-badge ${k.badge.type}">${escapeHTML(k.badge.text)}</span> ` : ''}
-        ${escapeHTML(k.sub)}
-      </div>
-    </div>
-  `).join('');
-
-  kpis.forEach(k => {
-    const el = document.getElementById(k.id);
-    if (el) makeCopyable(el, k.raw);
-  });
+  renderKpiCards(grid, kpis);
 }
 
 // ── Charts ──────────────────────────────────────────────
@@ -298,7 +280,7 @@ function buildAccumulationChart(data, type) {
       labels,
       datasets: [
         {
-          label: 'Net Worth',
+          label: 'Net worth',
           data: nwData,
           borderColor: CHART_COLORS.accent,
           backgroundColor: type === 'line' ? gradient : 'rgba(56,189,248,0.35)',
@@ -306,7 +288,7 @@ function buildAccumulationChart(data, type) {
           pointBackgroundColor: CHART_COLORS.accent, pointRadius: 3, pointHoverRadius: 6,
         },
         {
-          label: 'Total Assets',
+          label: 'Total assets',
           data: assetsData,
           borderColor: CHART_COLORS.success,
           backgroundColor: 'rgba(16,185,129,0.08)',
@@ -422,41 +404,34 @@ function renderTable() {
 
     return [
       formatDate(e.date),
-      formatINR(e.stocks),
-      formatINR(e.mutual_funds),
-      formatINR(e.cash),
-      formatINR(assets),
-      formatINR(e.credit_cards),
-      formatINR(net),
+      gridHtml(numCell(formatINR(e.stocks))),
+      gridHtml(numCell(formatINR(e.mutual_funds))),
+      gridHtml(numCell(formatINR(e.cash))),
+      gridHtml(numCell(formatINR(assets))),
+      gridHtml(numCell(formatINR(e.credit_cards), { tone: 'danger' })),
+      gridHtml(numCell(formatINR(net), { tone: 'accent', bold: true })),
       chgPct !== null
-        ? gridHtml(`<span style="color:${chgPct >= 0 ? 'var(--success)' : 'var(--danger)'}">
-            ${chgPct >= 0 ? '↑' : '↓'} ${Math.abs(chgPct).toFixed(1)}%
-          </span>`)
-        : '—',
-      gridHtml(`
-        <div style="display:flex;gap:0.35rem">
-          <button class="btn-sm btn-accent" onclick="window.__nwEdit('${e.id}')">
-            <i class="fas fa-pencil"></i>
-          </button>
-          <button class="btn-sm btn-danger" onclick="window.__nwDelete('${e.id}')">
-            <i class="fas fa-trash"></i>
-          </button>
-        </div>
-      `),
+        ? gridHtml(numCell(`${chgPct >= 0 ? '↑' : '↓'} ${Math.abs(chgPct).toFixed(1)}%`,
+                           { tone: chgPct >= 0 ? 'success' : 'danger' }))
+        : gridHtml(numCell('—')),
+      gridHtml(rowActions(`window.__nwEdit('${e.id}')`, `window.__nwDelete('${e.id}')`, 'snapshot')),
     ];
   });
 
   tableGrid = new Grid({
     columns: [
-      { name: 'Date', width: '100px' },
-      { name: 'Stocks' },
-      { name: 'MFs' },
-      { name: 'Cash' },
-      { name: 'Total Assets' },
-      { name: 'Liabilities', attributes: (_, row) => ({ style: 'color:var(--danger)' }) },
-      { name: 'Net Worth', attributes: (_, row) => ({ style: 'color:var(--accent);font-weight:700' }) },
-      { name: 'Change %' },
-      { name: 'Actions', sort: false },
+      // Column names are the words the rest of the app uses. This one read
+      // "MFs" next to a Settings screen and an allocation chart that both
+      // say "Mutual Funds".
+      { name: 'Date' },
+      { name: 'Stocks',       attributes: NUMERIC_COL },
+      { name: 'Mutual Funds', attributes: NUMERIC_COL },
+      { name: 'Cash',         attributes: NUMERIC_COL },
+      { name: 'Total Assets', attributes: NUMERIC_COL },
+      { name: 'Liabilities',  attributes: NUMERIC_COL },
+      { name: 'Net Worth',    attributes: NUMERIC_COL },
+      { name: 'Change',       attributes: NUMERIC_COL },
+      { name: 'Actions', sort: false, attributes: ACTIONS_COL },
     ],
     data: rows,
     pagination: { limit: 10 },
@@ -483,7 +458,7 @@ function renderTable() {
 // ── Form Modal ───────────────────────────────────────────
 function openEntryForm(entry = null) {
   editingId = entry?.id || null;
-  const title = entry ? 'Edit Snapshot' : 'Add Net Worth Snapshot';
+  const title = entry ? 'Edit snapshot' : 'Add a snapshot';
 
   openModal(`
     <div class="modal-header">
@@ -553,7 +528,7 @@ function openEntryForm(entry = null) {
     </div>
     <div class="modal-footer">
       <button class="btn-cancel" id="nw-form-cancel">Cancel</button>
-      <button class="btn-submit" id="nw-form-submit">${entry ? 'Save Changes' : 'Add Snapshot'}</button>
+      <button class="btn-submit" id="nw-form-submit">${entry ? 'Save changes' : 'Add snapshot'}</button>
     </div>
   `);
 
@@ -613,7 +588,7 @@ async function submitForm() {
   if (!payload.date) {
     showToast('Please select a date.', 'error');
     btn.disabled = false;
-    btn.textContent = editingId ? 'Save Changes' : 'Add Snapshot';
+    btn.textContent = editingId ? 'Save changes' : 'Add snapshot';
     return;
   }
 
@@ -623,7 +598,7 @@ async function submitForm() {
   if (error) {
     showToast('Save failed: ' + error.message, 'error');
     btn.disabled = false;
-    btn.textContent = editingId ? 'Save Changes' : 'Add Snapshot';
+    btn.textContent = editingId ? 'Save changes' : 'Add snapshot';
     return;
   }
 

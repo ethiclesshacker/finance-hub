@@ -7,6 +7,7 @@ import {
   formatINR, formatINRFull, formatPercent, destroyChart, makeCopyable, fetchEURtoINR,
   parseNum, escapeHTML, cssVar, CHART_COLORS, ASSET_COLORS,
   computeNet, computeAssets, computeLiquid, computeEmergencyFund,
+  renderKpiCards,
 } from '../utils.js';
 import { impliedSavingsRate } from '../finance.js';
 import { navigateTo } from '../router.js';
@@ -18,9 +19,10 @@ let clockTimer = null;
 
 export async function renderDashboard(container) {
   container.innerHTML = `
-    <div class="page-body" style="padding-top:1.5rem">
+    <div class="page-body card-stack">
 
-      <!-- Compact hero header: greeting left, net worth right -->
+      <!-- The greeting is this screen's page header; the figure it exists to
+           report sits on the same line. -->
       <div class="dash-header">
         <div class="dash-left">
           <div class="dash-greeting" id="dash-greeting"></div>
@@ -39,7 +41,7 @@ export async function renderDashboard(container) {
       <div class="kpi-grid" id="dashboard-kpis">
         ${Array(4).fill(0).map(() => `
           <div class="kpi-card">
-            <div class="skeleton" style="height:88px;border-radius:var(--radius-md)"></div>
+            <div class="skeleton skeleton--kpi"></div>
           </div>
         `).join('')}
       </div>
@@ -68,45 +70,43 @@ export async function renderDashboard(container) {
               <div class="chart-subtitle">Latest snapshot</div>
             </div>
           </div>
-          <div class="chart-canvas-wrap" style="height:220px">
+          <div class="chart-canvas-wrap">
             <canvas id="dash-alloc-chart"></canvas>
           </div>
         </div>
       </div>
 
       <!-- Life strip -->
-      <div class="chart-card" style="margin-top:1rem">
-        <div class="chart-header" style="margin-bottom:0">
+      <div class="chart-card">
+        <div class="chart-header">
           <div>
             <div class="chart-title">This month, actually</div>
             <div class="chart-subtitle">Recorded spending, against what you budgeted</div>
           </div>
           <button type="button" class="btn-sm btn-accent" id="dash-goto-ledger">
-            Open Life <i class="fas fa-arrow-right" style="font-size:0.7rem"></i>
+            Open Life <i class="fas fa-arrow-right" aria-hidden="true"></i>
           </button>
         </div>
         <div id="dash-life-strip">
-          <div class="skeleton" style="height:96px;border-radius:var(--radius-sm);margin-top:1rem"></div>
+          <div class="skeleton skeleton--strip"></div>
         </div>
       </div>
 
       <!-- Points strip -->
-      <div class="chart-card" style="margin-top:1rem">
-        <div class="chart-header" style="margin-bottom:0">
+      <div class="chart-card">
+        <div class="chart-header">
           <div>
-            <div class="chart-title">Points &amp; Rewards
-              <span id="fx-badge" style="font-size:0.7rem;font-weight:500;color:var(--text-muted);margin-left:0.5rem">·</span>
-            </div>
-            <div class="chart-subtitle">HSBC TravelOne</div>
+            <div class="chart-title">Points &amp; Rewards</div>
+            <div class="chart-subtitle">HSBC TravelOne <span id="fx-badge"></span></div>
           </div>
           <button type="button" class="btn-sm btn-accent" id="dash-goto-points">
-            View Details <i class="fas fa-arrow-right" style="font-size:0.7rem"></i>
+            View details <i class="fas fa-arrow-right" aria-hidden="true"></i>
           </button>
         </div>
         <div class="points-strip" id="points-strip">
           ${Array(4).fill(0).map(() => `
             <div class="points-strip-item">
-              <div class="skeleton" style="height:52px;border-radius:var(--radius-sm)"></div>
+              <div class="skeleton skeleton--stat"></div>
             </div>
           `).join('')}
         </div>
@@ -269,15 +269,13 @@ async function loadDashboardData() {
 
   const kpis = [
     {
-      id: 'dk-assets', label: 'Total Assets', icon: '🏦',
-      iconBg: 'rgba(16,185,129,0.1)', glow: 'var(--success-glow)',
+      id: 'dk-assets', label: 'Total assets', icon: 'fa-building-columns',
       value: formatINRFull(totalAssets), raw: totalAssets,
       sub: `Liquid: ${formatINR(computeLiquid(latest))}`,
       tooltip: 'Sum of all asset classes in your latest snapshot.',
     },
     {
-      id: 'dk-savings', label: 'Savings Rate', icon: '📈',
-      iconBg: 'rgba(56,189,248,0.1)', glow: 'var(--accent-glow)',
+      id: 'dk-savings', label: 'Savings rate', icon: 'fa-arrow-trend-up',
       value: savings ? formatPercent(savings.rate) : '—',
       raw: savings ? savings.rate.toFixed(1) : 0,
       progress: savings ? Math.max(0, Math.min(savings.rate, 100)) : undefined,
@@ -291,47 +289,23 @@ async function loadDashboardData() {
       tooltip: `Net worth growth ÷ income over the last 12 months. Includes investment returns, so it moves with the market. Budgeted rate: ${budgetRate.toFixed(0)}%.`,
     },
     {
-      id: 'dk-fi', label: 'FI Progress', icon: '🎯',
-      iconBg: 'rgba(167,139,250,0.1)', glow: 'var(--purple-glow)',
+      id: 'dk-fi', label: 'FI progress', icon: 'fa-bullseye',
       value: formatPercent(fiPct), raw: fiPct.toFixed(1),
       sub: `Target ${formatINR(fiTarget)}`,
       progress: fiPct,
       tooltip: `${settings.get('fi_multiplier')}× rule FIRE target. Target = ${settings.get('fi_multiplier')} × annual expenses.`,
     },
     {
-      id: 'dk-runway', label: 'Emergency Runway', icon: '🛡️',
-      iconBg: runwayOK ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)',
+      id: 'dk-runway', label: 'Emergency runway', icon: 'fa-shield-halved',
       glow: runwayOK ? 'var(--success-glow)' : 'var(--warning-glow)',
-      value: runway.toFixed(1) + ' months', raw: runway.toFixed(1),
+      value: runway.toFixed(1), unit: 'months', raw: runway.toFixed(1),
       badge: { text: runwayOK ? 'Healthy' : 'Build up', type: runwayOK ? 'positive' : 'neutral' },
       sub: `${basis === 'cash_like' ? 'Cash + FDs' : 'Liquid'} ÷ ₹${(monthlyExp / 1000).toFixed(0)}k/mo`,
       tooltip: `${basis === 'cash_like' ? 'Cash and fixed deposits' : 'Cash, stocks and mutual funds'} ÷ monthly baseline expenses. Target ≥ ${runwayTarget} months.`,
     },
   ];
 
-  const kpiContainer = document.getElementById('dashboard-kpis');
-  if (kpiContainer) {
-    kpiContainer.innerHTML = kpis.map(k => `
-      <div class="kpi-card" id="${k.id}" style="--kpi-glow:${k.glow}" title="${escapeHTML(k.tooltip)}">
-        <div class="kpi-header">
-          <span class="kpi-label">${escapeHTML(k.label)}</span>
-          <div class="kpi-icon" style="background:${k.iconBg}">${k.icon}</div>
-        </div>
-        <div class="kpi-value mono">${escapeHTML(k.value)}</div>
-        ${k.progress !== undefined ? `
-          <div class="progress-wrap" style="margin:0.4rem 0">
-            <div class="progress-bar" style="width:${k.progress}%"></div>
-          </div>
-        ` : ''}
-        <div class="kpi-sub">
-          ${k.badge ? `<span class="kpi-badge ${k.badge.type}">${escapeHTML(k.badge.text)}</span> ` : ''}
-          ${escapeHTML(k.sub)}
-        </div>
-      </div>
-    `).join('');
-
-    kpis.forEach(k => makeCopyable(document.getElementById(k.id), k.raw));
-  }
+  renderKpiCards(document.getElementById('dashboard-kpis'), kpis);
 
   // ── Points Strip ──────────────────────────────────────
   const strip = document.getElementById('points-strip');
@@ -350,15 +324,15 @@ async function loadDashboardData() {
         color: 'var(--danger)',
       },
       {
-        label: 'Balance Value',
+        label: 'Balance value',
         value: formatINRFull(balanceINR),
         sub: `${pointsPerEur > 0 ? (balance / pointsPerEur).toFixed(0) : 0} EUR`,
         color: 'var(--accent)',
       },
       {
-        label: 'Reward Rate',
+        label: 'Reward rate',
         value: formatPercent(rewardRate),
-        sub: rewardRate >= rewardTarget ? `✓ Above ${rewardTarget}% target` : `Target: > ${rewardTarget}%`,
+        sub: rewardRate >= rewardTarget ? `Above the ${rewardTarget}% target` : `Target: above ${rewardTarget}%`,
         color: rewardRate >= rewardTarget ? 'var(--success)' : 'var(--warning)',
       },
     ];
@@ -393,7 +367,7 @@ function buildNetWorthChart(entries, type = 'line') {
     data: {
       labels,
       datasets: [{
-        label: 'Net Worth',
+        label: 'Net worth',
         data,
         borderColor: CHART_COLORS.accent,
         backgroundColor: type === 'line' ? gradient : 'rgba(56,189,248,0.3)',

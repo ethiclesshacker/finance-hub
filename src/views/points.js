@@ -5,8 +5,16 @@ import * as settings from '../settings.js';
 import {
   formatINR, formatINRFull, formatPercent, formatDate, todayISO,
   destroyChart, makeCopyable, downloadCSV, escapeHTML, cssVar,
-  openModal, closeModal, showToast, parseNum, fetchEURtoINR, CHART_COLORS
+  openModal, closeModal, showToast, parseNum, fetchEURtoINR, CHART_COLORS, renderKpiCards,
+  numCell, rowActions,
 } from '../utils.js';
+
+// Grid.js applies these to both the header cell and every body cell in the
+// column, which is how a numeric column stays right-aligned end to end.
+// A data attribute, not a class: Grid.js writes `class` straight onto the
+// cell, replacing the gridjs-th / gridjs-td classes it needs to stay styled.
+const NUMERIC_COL = () => ({ 'data-align': 'end' });
+const ACTIONS_COL = () => ({ 'data-align': 'end' });
 
 /**
  * Points on a transaction. Every field goes through parseNum — a single null
@@ -75,7 +83,7 @@ export async function renderPoints(container) {
       <div class="kpi-grid kpi-grid--3col" id="pt-kpi-grid">
         ${Array(6).fill(0).map(() => `
           <div class="kpi-card">
-            <div class="skeleton" style="height:90px;border-radius:var(--radius-md)"></div>
+            <div class="skeleton skeleton--kpi"></div>
           </div>
         `).join('')}
       </div>
@@ -104,7 +112,7 @@ export async function renderPoints(container) {
               <div class="chart-subtitle">Top merchants by INR spend</div>
             </div>
           </div>
-          <div class="chart-canvas-wrap" style="height:220px">
+          <div class="chart-canvas-wrap">
             <canvas id="pt-merchant-chart"></canvas>
           </div>
         </div>
@@ -246,43 +254,37 @@ function renderKPIs() {
 
   const kpis = [
     {
-      id: 'pt-kpi-spent', label: 'Total Spent', icon: '🛒', color: 'var(--accent-glow)', iconBg: 'rgba(56,189,248,0.1)',
-      value: formatINRFull(totalSpent), raw: totalSpent,
+      id: 'pt-kpi-spent', label: 'Total spent', icon: 'fa-cart-shopping', tone: 'accent', value: formatINRFull(totalSpent), raw: totalSpent,
       progress: Math.min(progressPct, 100),
-      sub: progressPct >= 100 ? 'Milestone achieved! 🎉' : `₹${Math.round(remaining).toLocaleString('en-IN')} to ₹${(CC_MILESTONE_TARGET/100000).toFixed(0)}L milestone`,
+      sub: progressPct >= 100 ? 'Milestone reached' : `₹${Math.round(remaining).toLocaleString('en-IN')} to ₹${(CC_MILESTONE_TARGET/100000).toFixed(0)}L milestone`,
       tooltip: 'Lifetime total INR spend on the HSBC TravelOne card.',
     },
     {
-      id: 'pt-kpi-balance', label: 'Points Balance', icon: '⭐', color: 'var(--warning-glow)', iconBg: 'rgba(245,158,11,0.1)',
-      value: Math.round(balance).toLocaleString('en-IN') + ' pts', raw: Math.round(balance),
+      id: 'pt-kpi-balance', label: 'Points balance', icon: 'fa-star', tone: 'warning', value: Math.round(balance).toLocaleString('en-IN'), unit: 'pts', raw: Math.round(balance),
       sub: `Est. value: ${formatINRFull(balanceINR)}`,
       badge: { text: `${(balance / POINTS_PER_EUR).toFixed(0)} EUR`, type: 'neutral' },
       tooltip: `Accrued minus redeemed. Value = balance ÷ ${POINTS_PER_EUR} EUR × ₹${eurRate.toFixed(0)}/EUR`,
     },
     {
-      id: 'pt-kpi-accrued', label: 'Total Accrued', icon: '⬆️', color: 'var(--success-glow)', iconBg: 'rgba(16,185,129,0.1)',
-      value: Math.round(totalAccrued).toLocaleString('en-IN') + ' pts', raw: Math.round(totalAccrued),
+      id: 'pt-kpi-accrued', label: 'Total accrued', icon: 'fa-arrow-up-right-dots', tone: 'success', value: Math.round(totalAccrued).toLocaleString('en-IN'), unit: 'pts', raw: Math.round(totalAccrued),
       sub: `This month: ${Math.round(monthPts).toLocaleString('en-IN')} pts`,
       tooltip: 'All points ever earned on this card, including multiplier bonuses.',
     },
     {
-      id: 'pt-kpi-redeemed', label: 'Total Redeemed', icon: '✈️', color: 'var(--purple-glow)', iconBg: 'rgba(167,139,250,0.1)',
-      value: Math.round(totalRedeemed).toLocaleString('en-IN') + ' pts', raw: Math.round(totalRedeemed),
+      id: 'pt-kpi-redeemed', label: 'Total redeemed', icon: 'fa-plane-departure', tone: 'purple', value: Math.round(totalRedeemed).toLocaleString('en-IN'), unit: 'pts', raw: Math.round(totalRedeemed),
       sub: `Value realized: ${formatINRFull(totalRdValue)}`,
       tooltip: 'Total points burned across all redemptions. Sub-label = INR value you got back.',
     },
     {
-      id: 'pt-kpi-balval', label: 'Balance Value', icon: '💶', color: 'var(--teal-glow)', iconBg: 'rgba(45,212,191,0.1)',
-      value: formatINRFull(balanceINR), raw: balanceINR.toFixed(0),
+      id: 'pt-kpi-balval', label: 'Balance value', icon: 'fa-euro-sign', tone: 'teal', value: formatINRFull(balanceINR), raw: balanceINR.toFixed(0),
       sub: `${balanceEUR.toFixed(1)} EUR @ ₹${eurRate.toFixed(0)}`,
       badge: { text: 'Live FX', type: 'neutral' },
       tooltip: `Balance ÷ ${POINTS_PER_EUR} EUR converted to INR at live EUR/INR rate.`,
     },
     {
-      id: 'pt-kpi-rate', label: 'Reward Rate', icon: '📈', color: 'var(--pink-glow)', iconBg: 'rgba(244,114,182,0.1)',
-      value: formatPercent(rewardRate), raw: rewardRate.toFixed(2),
+      id: 'pt-kpi-rate', label: 'Reward rate', icon: 'fa-arrow-trend-up', tone: 'pink', value: formatPercent(rewardRate), raw: rewardRate.toFixed(2),
       sub: `Avg value per point: ₹${avgVPP.toFixed(2)}`,
-      badge: rewardRate > 0 ? { text: rewardRate >= CC_REWARD_TARGET_RATE ? `✓ >${CC_REWARD_TARGET_RATE}% target` : `Target: ${CC_REWARD_TARGET_RATE}%`, type: rewardRate >= CC_REWARD_TARGET_RATE ? 'positive' : 'neutral' } : null,
+      badge: rewardRate > 0 ? { text: rewardRate >= CC_REWARD_TARGET_RATE ? `Above ${CC_REWARD_TARGET_RATE}% target` : `Target ${CC_REWARD_TARGET_RATE}%`, type: rewardRate >= CC_REWARD_TARGET_RATE ? 'positive' : 'neutral' } : null,
       tooltip: `(Redemption value + Balance INR) ÷ Total Spend × 100. Target > ${CC_REWARD_TARGET_RATE}%.`,
     },
   ];
@@ -290,29 +292,7 @@ function renderKPIs() {
   const grid = document.getElementById('pt-kpi-grid');
   if (!grid) return;
 
-  grid.innerHTML = kpis.map(k => `
-    <div class="kpi-card" id="${k.id}" style="--kpi-glow:${k.color}" title="${escapeHTML(k.tooltip)}">
-      <div class="kpi-header">
-        <span class="kpi-label">${escapeHTML(k.label)}</span>
-        <div class="kpi-icon" style="background:${k.iconBg}">${k.icon}</div>
-      </div>
-      <div class="kpi-value mono">${escapeHTML(k.value)}</div>
-      ${k.progress !== undefined ? `
-        <div class="progress-wrap" style="margin:0.4rem 0">
-          <div class="progress-bar" style="width:${k.progress}%"></div>
-        </div>
-      ` : ''}
-      <div class="kpi-sub">
-        ${k.badge ? `<span class="kpi-badge ${k.badge.type}">${escapeHTML(k.badge.text)}</span> ` : ''}
-        ${escapeHTML(k.sub)}
-      </div>
-    </div>
-  `).join('');
-
-  kpis.forEach(k => {
-    const el = document.getElementById(k.id);
-    if (el) makeCopyable(el, k.raw);
-  });
+  renderKpiCards(grid, kpis);
 }
 
 // ── Charts ──────────────────────────────────────────────
@@ -338,7 +318,7 @@ function buildAccumulationChart(txns, type) {
     data: {
       labels,
       datasets: [{
-        label: 'Points Earned',
+        label: 'Points earned',
         data,
         backgroundColor: type === 'bar' ? 'rgba(167,139,250,0.5)' : 'rgba(167,139,250,0.15)',
         borderColor: CHART_COLORS.purple,
@@ -486,24 +466,23 @@ function renderTxTable() {
       formatDate(t.date),
       t.merchant,
       t.description || '—',
-      gridHtml(`<span style="font-weight:600">₹${parseNum(t.amount).toLocaleString('en-IN')}</span>`),
+      gridHtml(numCell(formatINRFull(parseNum(t.amount)), { bold: true })),
       gridHtml(`<span class="badge ${getMultiplierBadgeClass(t.multiplier)}">${escapeHTML(t.multiplier)}×</span>`),
-      gridHtml(`<span style="color:var(--success);font-weight:600">${Math.round(pts).toLocaleString('en-IN')} pts</span>`),
-      gridHtml(`
-        <div style="display:flex;gap:0.35rem">
-          <button class="btn-sm btn-accent" onclick="window.__ptTxEdit('${t.id}')">
-            <i class="fas fa-pencil"></i>
-          </button>
-          <button class="btn-sm btn-danger" onclick="window.__ptTxDelete('${t.id}')">
-            <i class="fas fa-trash"></i>
-          </button>
-        </div>
-      `),
+      gridHtml(numCell(Math.round(pts).toLocaleString('en-IN'), { tone: 'success', bold: true })),
+      gridHtml(rowActions(`window.__ptTxEdit('${t.id}')`, `window.__ptTxDelete('${t.id}')`, 'transaction')),
     ];
   });
 
   txTableGrid = new Grid({
-    columns: ['Date','Merchant','Description','Amount','Multiplier','Points','Actions'],
+    columns: [
+      { name: 'Date' },
+      { name: 'Merchant' },
+      { name: 'Description' },
+      { name: 'Amount', attributes: NUMERIC_COL },
+      { name: 'Multiplier' },
+      { name: 'Points', attributes: NUMERIC_COL },
+      { name: 'Actions', sort: false, attributes: ACTIONS_COL },
+    ],
     data: rows,
     pagination: { limit: 10 },
     sort: true,
@@ -547,24 +526,23 @@ function renderRdTable() {
       formatDate(r.date),
       r.partner,
       r.description || '—',
-      gridHtml(`<span style="color:var(--danger);font-weight:600">${parseNum(r.points_redeemed).toLocaleString('en-IN')} pts</span>`),
-      gridHtml(`<span style="font-weight:600">₹${parseNum(r.value_amount).toLocaleString('en-IN')}</span>`),
-      gridHtml(`<span style="color:var(--success)">₹${vpp.toFixed(3)}/pt</span>`),
-      gridHtml(`
-        <div style="display:flex;gap:0.35rem">
-          <button class="btn-sm btn-accent" onclick="window.__ptRdEdit('${r.id}')">
-            <i class="fas fa-pencil"></i>
-          </button>
-          <button class="btn-sm btn-danger" onclick="window.__ptRdDelete('${r.id}')">
-            <i class="fas fa-trash"></i>
-          </button>
-        </div>
-      `),
+      gridHtml(numCell(parseNum(r.points_redeemed).toLocaleString('en-IN'), { tone: 'danger', bold: true })),
+      gridHtml(numCell(formatINRFull(parseNum(r.value_amount)), { bold: true })),
+      gridHtml(numCell('₹' + vpp.toFixed(3), { tone: 'success' })),
+      gridHtml(rowActions(`window.__ptRdEdit('${r.id}')`, `window.__ptRdDelete('${r.id}')`, 'redemption')),
     ];
   });
 
   rdTableGrid = new Grid({
-    columns: ['Date','Partner','Description','Points','Value','Value/pt','Actions'],
+    columns: [
+      { name: 'Date' },
+      { name: 'Partner' },
+      { name: 'Description' },
+      { name: 'Points', attributes: NUMERIC_COL },
+      { name: 'Value', attributes: NUMERIC_COL },
+      { name: 'Value per point', attributes: NUMERIC_COL },
+      { name: 'Actions', sort: false, attributes: ACTIONS_COL },
+    ],
     data: rows,
     pagination: { limit: 10 },
     sort: true,
@@ -590,9 +568,10 @@ function openForm(data, type) {
   editingType = type;
 
   const isTransaction = type === 'transaction';
-  const title = data
-    ? `Edit ${isTransaction ? 'Transaction' : 'Redemption'}`
-    : `Add ${isTransaction ? 'Transaction' : 'Redemption'}`;
+  // Sentence case, and the same noun the submit button uses — the dialog said
+  // "Add Transaction" over a button that said "Add transaction".
+  const noun = isTransaction ? 'transaction' : 'redemption';
+  const title = data ? `Edit ${noun}` : `Add ${noun}`;
 
   const transactionForm = `
     <div class="form-row">
@@ -676,22 +655,22 @@ function openForm(data, type) {
   openModal(`
     <div class="modal-header">
       <div class="modal-title">${escapeHTML(title)}</div>
-      <button class="modal-close" id="pt-modal-close"><i class="fas fa-times"></i></button>
+      <button type="button" class="modal-close" id="pt-modal-close" aria-label="Close"><i class="fas fa-times" aria-hidden="true"></i></button>
     </div>
     <div class="modal-tabs">
-      <div class="modal-tab ${isTransaction ? 'active' : ''}" id="modal-tab-tx" style="cursor:pointer">
-        <i class="fas fa-receipt" style="margin-right:0.3rem"></i>Transaction
-      </div>
-      <div class="modal-tab ${!isTransaction ? 'active' : ''}" id="modal-tab-rd" style="cursor:pointer">
-        <i class="fas fa-plane" style="margin-right:0.3rem"></i>Redemption
-      </div>
+      <button type="button" class="modal-tab ${isTransaction ? 'active' : ''}" id="modal-tab-tx" aria-pressed="${isTransaction}">
+        <i class="fas fa-receipt" aria-hidden="true"></i>Transaction
+      </button>
+      <button type="button" class="modal-tab ${!isTransaction ? 'active' : ''}" id="modal-tab-rd" aria-pressed="${!isTransaction}">
+        <i class="fas fa-plane" aria-hidden="true"></i>Redemption
+      </button>
     </div>
     <div class="modal-body" id="pt-form-body">
       ${isTransaction ? transactionForm : redemptionForm}
     </div>
     <div class="modal-footer">
       <button class="btn-cancel" id="pt-form-cancel">Cancel</button>
-      <button class="btn-submit" id="pt-form-submit">${data ? 'Save Changes' : `Add ${isTransaction ? 'Transaction' : 'Redemption'}`}</button>
+      <button class="btn-submit" id="pt-form-submit">${data ? 'Save changes' : `Add ${isTransaction ? 'transaction' : 'redemption'}`}</button>
     </div>
   `);
 
@@ -706,7 +685,7 @@ function openForm(data, type) {
       document.getElementById('modal-tab-tx').classList.add('active');
       document.getElementById('modal-tab-rd').classList.remove('active');
       document.getElementById('pt-form-body').innerHTML = transactionForm;
-      document.getElementById('pt-form-submit').textContent = 'Add Transaction';
+      document.getElementById('pt-form-submit').textContent = 'Add transaction';
       attachTxPreview();
     });
     document.getElementById('modal-tab-rd').addEventListener('click', () => {
@@ -714,7 +693,7 @@ function openForm(data, type) {
       document.getElementById('modal-tab-rd').classList.add('active');
       document.getElementById('modal-tab-tx').classList.remove('active');
       document.getElementById('pt-form-body').innerHTML = redemptionForm;
-      document.getElementById('pt-form-submit').textContent = 'Add Redemption';
+      document.getElementById('pt-form-submit').textContent = 'Add redemption';
       attachRdPreview();
     });
   }
@@ -773,7 +752,7 @@ async function submitForm() {
 
     if (!payload.date || !payload.merchant) {
       showToast('Please fill in Date and Merchant.', 'error');
-      btn.disabled = false; btn.textContent = 'Add Transaction'; return;
+      btn.disabled = false; btn.textContent = 'Add transaction'; return;
     }
     if (editingId) payload.id = editingId;
 
@@ -791,7 +770,7 @@ async function submitForm() {
 
     if (!payload.date || !payload.points_redeemed) {
       showToast('Please fill in Date and Points Redeemed.', 'error');
-      btn.disabled = false; btn.textContent = 'Add Redemption'; return;
+      btn.disabled = false; btn.textContent = 'Add redemption'; return;
     }
     if (editingId) payload.id = editingId;
 
@@ -801,7 +780,7 @@ async function submitForm() {
   if (error) {
     showToast('Save failed: ' + error.message, 'error');
     btn.disabled = false;
-    btn.textContent = editingId ? 'Save Changes' : `Add ${editingType}`;
+    btn.textContent = editingId ? 'Save changes' : `Add ${editingType}`;
     return;
   }
 

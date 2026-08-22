@@ -25,7 +25,7 @@ export function renderLogin({ error } = {}) {
 
       <div class="login-card">
         <div class="login-logo">
-          <div class="login-logo-icon">💰</div>
+          <div class="login-logo-icon" aria-hidden="true"><i class="fas fa-wallet"></i></div>
           <h1>FinanceHub</h1>
           <p>Your personal finance command centre</p>
         </div>

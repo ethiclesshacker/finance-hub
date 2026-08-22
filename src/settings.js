@@ -24,42 +24,42 @@ export const SETTINGS_SCHEMA = {
   },
   age: {
     type: 'number', default: 26, min: 15, max: 100, step: 1, group: 'Profile',
-    label: 'Age', hint: 'Drives the wealth score and the Coast FI horizon.',
+    label: 'Age', suffix: 'years', hint: 'Drives the wealth score and the Coast FI horizon.',
   },
   retirement_age: {
     type: 'number', default: 60, min: 30, max: 100, step: 1, group: 'Profile',
-    label: 'Target retirement age', hint: 'The age Coast FI compounds towards.',
+    label: 'Target retirement age', suffix: 'years', hint: 'The age Coast FI compounds towards.',
   },
 
   monthly_net_income: {
     type: 'number', default: 93795, min: 0, step: 1, group: 'Cashflow',
-    label: 'Monthly net income (₹)', hint: 'Take-home, after tax and deductions.',
+    label: 'Monthly net income', prefix: '₹', hint: 'Take-home, after tax and deductions.',
   },
   monthly_expenses: {
     type: 'number', default: 40000, min: 0, step: 1, group: 'Cashflow',
-    label: 'Monthly baseline expenses (₹)', hint: 'Drives both the FI target and the emergency runway.',
+    label: 'Monthly baseline expenses', prefix: '₹', hint: 'Drives both the FI target and the emergency runway.',
   },
 
   fi_multiplier: {
     type: 'number', default: 25, min: 10, max: 50, step: 0.5, group: 'Financial independence',
-    label: 'FI multiplier', hint: '25× annual expenses is the 4% safe-withdrawal rule.',
+    label: 'FI multiplier', suffix: '×', hint: '25× annual expenses is the 4% safe-withdrawal rule.',
   },
   monthly_contribution: {
     type: 'number', default: 0, min: 0, step: 1000, group: 'Financial independence',
-    label: 'Monthly contribution (₹)',
+    label: 'Monthly contribution', prefix: '₹',
     hint: 'What you actually invest each month. Leave at 0 to use your budgeted surplus (income − expenses).',
   },
   expected_return: {
     type: 'number', default: 10, min: 0, max: 30, step: 0.25, group: 'Financial independence',
-    label: 'Expected annual return (%)', hint: 'Nominal, before inflation. Used for projections.',
+    label: 'Expected annual return', suffix: '%', hint: 'Nominal, before inflation. Used for projections.',
   },
   inflation_rate: {
     type: 'number', default: 5, min: 0, max: 20, step: 0.25, group: 'Financial independence',
-    label: 'Expected inflation (%)', hint: 'Used when you project in today’s rupees.',
+    label: 'Expected inflation', suffix: '%', hint: 'Used when you project in today’s rupees.',
   },
   passive_income_yield: {
     type: 'number', default: 5, min: 0, max: 20, step: 0.25, group: 'Financial independence',
-    label: 'Blended passive yield (%)', hint: 'Applied to stocks + mutual funds + FDs.',
+    label: 'Blended passive yield', suffix: '%', hint: 'Applied to stocks + mutual funds + FDs.',
   },
   wealth_score_divisor: {
     type: 'number', default: 10, min: 1, max: 50, step: 1, group: 'Financial independence',
@@ -68,7 +68,7 @@ export const SETTINGS_SCHEMA = {
 
   emergency_runway_target: {
     type: 'number', default: 6, min: 1, max: 36, step: 1, group: 'Safety',
-    label: 'Emergency runway target (months)', hint: 'Below this the runway KPI shows "Build up".',
+    label: 'Emergency runway target', suffix: 'months', hint: 'Below this the runway KPI shows "Build up".',
   },
   emergency_fund_basis: {
     type: 'enum', default: 'accessible', group: 'Safety',
@@ -81,20 +81,20 @@ export const SETTINGS_SCHEMA = {
   },
   solvency_target: {
     type: 'number', default: 3, min: 1, max: 20, step: 0.5, group: 'Safety',
-    label: 'Solvency ratio target (×)', hint: 'Assets ÷ liabilities. Above this reads "Strong".',
+    label: 'Solvency ratio target', suffix: '×', hint: 'Assets ÷ liabilities. Above this reads "Strong".',
   },
 
   points_per_eur: {
     type: 'number', default: 50, min: 1, step: 1, group: 'Credit card',
-    label: 'Points per EUR', hint: 'HSBC TravelOne transfer ratio.',
+    label: 'Points per EUR', suffix: 'pts', hint: 'HSBC TravelOne transfer ratio.',
   },
   cc_milestone_target: {
     type: 'number', default: 1200000, min: 0, step: 1000, group: 'Credit card',
-    label: 'Annual spend milestone (₹)', hint: 'Spend needed for the fee waiver / bonus.',
+    label: 'Annual spend milestone', prefix: '₹', hint: 'Spend needed for the fee waiver / bonus.',
   },
   cc_reward_target_rate: {
     type: 'number', default: 8, min: 0, max: 100, step: 0.5, group: 'Credit card',
-    label: 'Reward rate target (%)', hint: 'Value returned as a percentage of spend.',
+    label: 'Reward rate target', suffix: '%', hint: 'Value returned as a percentage of spend.',
   },
 
   // ── Event ledger ──────────────────────────────────────
@@ -123,7 +123,7 @@ export const SETTINGS_SCHEMA = {
   },
   ledger_dedupe_window_minutes: {
     type: 'number', default: 180, min: 5, max: 1440, step: 5, group: 'Event ledger',
-    label: 'Duplicate window (minutes)',
+    label: 'Duplicate window', suffix: 'min',
     hint: 'How far apart two sources can describe the same event. A card alert can lag the receipt by hours.',
   },
   ledger_dedupe_amount_tolerance: {
@@ -150,12 +150,32 @@ export const SETTINGS_SCHEMA = {
   },
   ledger_snippet_retention_days: {
     type: 'number', default: 90, min: 0, max: 3650, step: 1, group: 'Event ledger',
-    label: 'Keep email snippets for (days)',
+    label: 'Keep email snippets for', suffix: 'days',
     hint: 'Cached body text is only for debugging an extraction. The source reference itself is kept forever.',
   },
 };
 
-export const SETTING_GROUPS = ['Profile', 'Cashflow', 'Financial independence', 'Safety', 'Credit card', 'Event ledger'];
+// A group is not just a heading: it says what the settings under it are for,
+// and whether they are the kind anyone changes. The ledger's eleven matching
+// thresholds sat at the same visual weight as "Monthly net income", which is
+// the one field almost everybody edits.
+export const SETTING_GROUPS = [
+  { name: 'Profile', icon: 'fa-user',
+    blurb: 'Who the projections are about.' },
+  { name: 'Cashflow', icon: 'fa-arrow-right-arrow-left',
+    blurb: 'What comes in and what goes out each month. Almost everything else is derived from these two.' },
+  { name: 'Financial independence', icon: 'fa-bullseye',
+    blurb: 'The target, and the assumptions the path to it is drawn with.' },
+  { name: 'Safety', icon: 'fa-shield-halved',
+    blurb: 'How much cushion counts as enough, and what counts as cushion.' },
+  { name: 'Credit card', icon: 'fa-credit-card',
+    blurb: 'HSBC TravelOne: the transfer ratio and the targets the Points screen measures against.' },
+  { name: 'Event ledger', icon: 'fa-timeline', advanced: true,
+    blurb: 'How email is turned into events: what counts as certain, and when two sources are describing the same thing. The defaults are tuned against a real inbox — change them only if the timeline is getting things wrong.' },
+];
+
+/** Just the names, in order. The database and the tests only need these. */
+export const SETTING_GROUP_NAMES = SETTING_GROUPS.map(g => g.name);
 
 /** Defaults for every key, used before load and for any row the user has never saved. */
 function defaults() {
