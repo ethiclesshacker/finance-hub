@@ -1,0 +1,21 @@
+{
+  "//": "USD per 1,000,000 tokens, from the OpenAI pricing page. Edit when rates change — costs are computed at read time, so the whole recorded history re-values itself.",
+  "//context": "Long-context rates apply above long_context_threshold prompt tokens. This pipeline's calls run 1-5k, so short-context rates are what it actually pays.",
+  "models": {
+    "gpt-5.6-luna": {
+      "input": 0.20, "cached_input": 0.02, "cache_write": 0.25, "output": 1.20,
+      "long_context_threshold": 128000,
+      "long_context": { "input": 0.40, "cached_input": 0.04, "cache_write": 0.50, "output": 1.80 }
+    },
+    "gpt-5.6-terra": {
+      "input": 2.00, "cached_input": 0.20, "cache_write": 2.50, "output": 12.00,
+      "long_context_threshold": 128000,
+      "long_context": { "input": 4.00, "cached_input": 0.40, "cache_write": 5.00, "output": 18.00 }
+    },
+    "gpt-5.6-sol": {
+      "input": 4.00, "cached_input": 0.40, "cache_write": 5.00, "output": 20.00,
+      "long_context_threshold": 128000,
+      "long_context": { "input": 8.00, "cached_input": 0.80, "cache_write": 10.00, "output": 30.00 }
+    }
+  }
+}

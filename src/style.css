@@ -1649,3 +1649,293 @@ input, select, textarea {
   white-space: nowrap;
 }
 .fi-dirty.is-unsaved { color: var(--warning); font-weight: 600; }
+
+/* ============================================================
+   LIFE / EVENT LEDGER
+   ============================================================ */
+
+/* ---------- Timeline ---------- */
+.timeline {
+  padding: 0.25rem 0 1rem;
+}
+
+.tl-day + .tl-day {
+  margin-top: 1.25rem;
+}
+
+.tl-day-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 1rem;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  /* The day heading has to stay readable over rows scrolling underneath it. */
+  background: linear-gradient(to bottom, var(--bg-card) 70%, transparent);
+  backdrop-filter: blur(4px);
+}
+.tl-day-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.tl-day-meta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.tl-item {
+  display: grid;
+  grid-template-columns: 3.25rem 2rem 1fr auto;
+  align-items: start;
+  gap: 0.75rem;
+  padding: 0.7rem 1rem;
+  border-left: 2px solid transparent;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+.tl-item:hover,
+.tl-item:focus-visible {
+  background: var(--bg-hover);
+  border-left-color: var(--accent);
+  outline: none;
+}
+/* Anything the system is unsure about is marked in the timeline itself, not
+   only in the review queue — an uncertain row should never read as a fact. */
+.tl-item--review {
+  border-left-color: var(--warning);
+  background: var(--warning-dim);
+}
+
+.tl-time {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  padding-top: 0.35rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.tl-icon {
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-full);
+  display: grid;
+  place-items: center;
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+
+.tl-body { min-width: 0; }
+
+.tl-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.tl-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+.tl-meta > span + span::before {
+  content: '·';
+  margin-right: 0.5rem;
+  opacity: 0.5;
+}
+.tl-type { font-weight: 600; }
+
+.tl-tags {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding-top: 0.2rem;
+}
+
+/* The source indicator is deliberately always present: an event with no
+   visible provenance is indistinguishable from one that was invented. */
+.tl-source {
+  color: var(--text-disabled);
+  font-size: 0.78rem;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.1rem;
+}
+.tl-source sup {
+  font-size: 0.6rem;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* ---------- Detail ---------- */
+.lg-detail-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid var(--border);
+}
+.lg-detail-when {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.lg-detail-desc {
+  margin: 0.85rem 0 0;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.lg-section { margin-top: 1.1rem; }
+.lg-section-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.lg-section-hint {
+  font-size: 0.68rem;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-disabled);
+}
+
+.lg-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0.4rem;
+}
+.lg-field {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.45rem 0.65rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+}
+.lg-field-key { color: var(--text-muted); text-transform: capitalize; }
+.lg-field-value { color: var(--text-primary); text-align: right; overflow-wrap: anywhere; }
+
+.lg-sources { display: flex; flex-direction: column; gap: 0.45rem; }
+.lg-source {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.6rem 0.75rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.lg-source-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.lg-source-meta {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-top: 0.15rem;
+  overflow-wrap: anywhere;
+}
+.lg-source-snippet {
+  font-size: 0.72rem;
+  color: var(--text-disabled);
+  margin-top: 0.35rem;
+  line-height: 1.45;
+  border-left: 2px solid var(--border);
+  padding-left: 0.5rem;
+}
+
+.lg-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.lg-chip {
+  background: var(--accent-dim);
+  border: 1px solid var(--border-accent, var(--border));
+  color: var(--accent-light);
+  border-radius: var(--radius-full);
+  padding: 0.25rem 0.7rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: background var(--transition);
+}
+.lg-chip:hover { background: var(--accent-glow); }
+
+.lg-history { display: flex; flex-direction: column; gap: 0.25rem; }
+.lg-history-row {
+  display: grid;
+  grid-template-columns: 11rem 1fr auto;
+  gap: 0.5rem;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  padding: 0.3rem 0;
+  border-bottom: 1px dashed var(--border);
+}
+
+/* ---------- Quick add ---------- */
+.lg-preview {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+  min-height: 4.5rem;
+  font-size: 0.85rem;
+}
+.lg-preview-row { display: flex; align-items: center; gap: 0.5rem; }
+.lg-preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+/* What the parser guessed is stated as a guess, in the same breath as the
+   result — a wrong assumption should be correctable before it is saved. */
+.lg-preview-assumed {
+  margin-top: 0.5rem;
+  font-size: 0.72rem;
+  color: var(--warning);
+}
+
+.lg-advanced { margin-top: 0.9rem; }
+.lg-advanced > summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  padding: 0.4rem 0;
+  user-select: none;
+}
+.lg-advanced[open] > summary { margin-bottom: 0.6rem; }
+
+@media (max-width: 640px) {
+  .tl-item {
+    grid-template-columns: 3rem 1fr;
+    grid-template-areas: 'time body' '. tags';
+    row-gap: 0.35rem;
+  }
+  .tl-time { grid-area: time; }
+  .tl-icon { display: none; }
+  .tl-body { grid-area: body; }
+  .tl-tags { grid-area: tags; }
+  .lg-history-row { grid-template-columns: 1fr; }
+}

@@ -1,5 +1,5 @@
 // Hash-based SPA router
-// URLs: /#dashboard, /#networth, /#points
+// URLs: /#dashboard, /#networth, /#points, /#ledger
 // Handles refresh, back/forward, and deep-links automatically.
 
 const routes = {};
@@ -8,7 +8,7 @@ export function registerRoute(id, renderFn) {
   routes[id] = renderFn;
 }
 
-const VALID_VIEWS = ['dashboard', 'networth', 'points', 'fi', 'settings'];
+const VALID_VIEWS = ['dashboard', 'networth', 'points', 'fi', 'ledger', 'settings'];
 const FALLBACK    = 'dashboard';
 
 /** Read the current hash and return the view ID it maps to. */

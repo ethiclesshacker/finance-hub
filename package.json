@@ -9,7 +9,13 @@
     "preview": "vite preview",
     "test": "node --test 'test/*.test.js'",
     "deploy": "npm run build && wrangler pages deploy dist --project-name finance --branch main",
-    "deploy:preview": "npm run build && wrangler pages deploy dist --project-name finance --branch preview"
+    "deploy:preview": "npm run build && wrangler pages deploy dist --project-name finance --branch preview",
+    "ledger:probe": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js probe",
+    "ledger:ingest": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js ingest",
+    "ledger:summarize": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js summarize",
+    "ledger:tool": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js tool",
+    "ledger:users": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js users",
+    "ledger:costs": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js costs"
   },
   "devDependencies": {
     "vite": "^8.1.1"
@@ -21,6 +27,8 @@
     "chart.js": "^4.5.1",
     "chartjs-adapter-date-fns": "^3.0.0",
     "date-fns": "^4.4.0",
-    "gridjs": "^6.2.0"
+    "gridjs": "^6.2.0",
+    "imapflow": "^1.0.194",
+    "mailparser": "^3.7.4"
   }
 }

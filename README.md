@@ -1,6 +1,6 @@
 # FinanceHub — Personal Finance Command Centre
 
-FinanceHub is a single-page personal finance app: net worth snapshots, asset allocation, emergency runway, financial-independence projections, and a full HSBC TravelOne points and redemptions ledger — backed by Supabase and deployed to Cloudflare Pages.
+FinanceHub is a single-page personal finance app: net worth snapshots, asset allocation, emergency runway, financial-independence projections, a full HSBC TravelOne points and redemptions ledger, and a **Personal Event Ledger** that records what actually happens in your life — backed by Supabase and deployed to Cloudflare Pages.
 
 ---
 
@@ -12,6 +12,7 @@ FinanceHub is a single-page personal finance app: net worth snapshots, asset all
 | `#networth` | Snapshot history with KPIs, accumulation and allocation charts, filtering and CSV export. |
 | `#fi` | Savings rate (actual vs budgeted), time to FI, Coast FI, and a projection chart with live scenario sliders. |
 | `#points` | Transactions and redemptions, multiplier tracking, spend-by-merchant, value-per-point, CSV export. |
+| `#ledger` | **Life** — a chronological record of purchases, meals, travel, meetings and deliveries, filled in automatically from email. Filters, search, provenance on every event, a review queue and export. |
 | `#settings` | Every personal number the other screens derive from. |
 
 ---
@@ -25,6 +26,45 @@ Personal numbers — income, expenses, FI multiplier, expected return, targets �
 - A key with no stored row falls back to its schema default, so nothing needs seeding.
 
 `src/constants.js` keeps only what describes the app and the card itself (multiplier tiers, transfer partners) — things a user should not be able to diverge from.
+
+---
+
+## The Personal Event Ledger
+
+A structured record of things that happened, populated mostly by itself. Email
+arrives, is parsed into events, deduplicated against everything already known,
+and lands on the timeline with its source attached. Full reference:
+**[docs/ledger.md](docs/ledger.md)**.
+
+Three properties it is built around:
+
+- **Provenance is never lost.** Every automatic event points at the source it
+  came from, and keeps *all* sources when several describe the same thing — an
+  order email and its card alert become one purchase with two references.
+- **Facts and interpretation are separate columns.** `events.data` holds what a
+  source stated; `events.inference` holds what a model made of it. The second
+  can never overwrite the first.
+- **The model is the last resort, not the first.** Header triage, embedded
+  schema.org markup, `.ics` attachments and per-sender rules run first and are
+  free. Against a real 30-day inbox: 621 message bodies read, 156 events
+  extracted, **3 model calls** — and every billable call is recorded locally.
+
+```bash
+npm run ledger:probe -- --days 7      # dry run against your mail: no database, no model calls
+npm run ledger:ingest                 # the real thing
+npm run ledger:ingest -- --backfill-days 30   # rescan a window, ignoring the checkpoint
+npm run ledger:summarize -- --period day
+npm run ledger:costs                  # what the model has cost, from a local ledger
+npm run ledger:tool -- search_events '{"query":"amazon","date_range":"last 30 days"}'
+```
+
+Every billable call is recorded locally before its result is used — failures
+included, since a call that timed out was still billed. `ledger/pricing.json`
+turns tokens into money at read time, so a corrected rate re-values the history
+rather than leaving old rows wrong.
+
+Ingestion runs locally under launchd (`ledger/launchd/`), so your mailbox
+credentials and the Supabase service-role key never leave your machine.
 
 ---
 
@@ -63,6 +103,8 @@ Run the migrations in `supabase/migrations/` in order, via the Supabase SQL edit
 
 - `0001_user_settings.sql` — the settings table, its RLS policies and an `updated_at` trigger.
 - `0002_harden_rls.sql` — `NOT NULL` on `user_id` for the three data tables. A null `user_id` can never satisfy `auth.uid() = user_id`, so such a row is invisible to everyone, owner included.
+- `0003_event_ledger.sql` — the event ledger: tables, indexes, triggers, RLS and grants.
+- `0004_ledger_api.sql` — the ledger's function layer. Ingestion, deduplication, search, summaries and export. The browser, the jobs and Hermes all call these same functions.
 
 `supabase/checks/rls_audit.sql` is a read-only audit: it reports whether RLS is enabled, whether every command is owner-scoped, which commands have no policy, and whether any row has a null `user_id`. Run it after any policy change.
 
@@ -80,10 +122,66 @@ The app sends a bare origin as `emailRedirectTo`. If it is not allow-listed, Sup
 ```bash
 npm install
 npm run dev      # http://localhost:5173
-npm test         # pure maths: net worth, savings rate, projections
+npm test         # pure maths, and the ledger's extraction / dedupe / summary core
 npm run build
 npm run preview
 ```
+
+### 5. The event ledger (optional, but it is the point of `#ledger`)
+
+The ingestion jobs run on **your machine**, not on Cloudflare or in Supabase.
+That is deliberate: your mailbox password and the Supabase service-role key
+never leave the laptop. The cost is that mail is only ingested while it is
+awake, which idempotent ingestion makes harmless.
+
+```bash
+cp .env.ledger.example .env.ledger && chmod 600 .env.ledger
+cp ledger/accounts.example.json ledger/accounts.json && chmod 600 ledger/accounts.json
+```
+
+`.env.ledger` needs exactly **one** value: `SUPABASE_SERVICE_ROLE_KEY`. The
+project URL is read from `VITE_SUPABASE_URL` in `.env`, and the user id is
+resolved automatically when the project has a single user (`npm run
+ledger:users` lists them if it has more).
+
+The service-role key is *not* a duplicate of the anon key. The anon key is
+subject to RLS and carries no session, so `auth.uid()` is null for a background
+job and every write is refused. The jobs write on your behalf with nobody
+signed in, which only the service role can do. It is deliberately not
+`VITE_`-prefixed — Vite only inlines `VITE_*` — and it lives in a separate
+gitignored file because it bypasses RLS entirely.
+
+Mail accounts go in `ledger/accounts.json` — any number of them, any IMAP
+provider. Passwords are read from the macOS Keychain or an environment
+variable, never from the file:
+
+```bash
+# Gmail and Zoho both need an app-specific password, not your login password.
+security add-generic-password -s finance-hub-ledger -a you@gmail.com -w
+```
+
+Then look before you leap. `probe` connects, reads and extracts, but writes
+nothing, spends no model calls, and does not mark anything as read:
+
+```bash
+npm run ledger:probe -- --days 7 --limit 100
+```
+
+It prints what each layer extracted, how much would reach the model, and which
+senders the rules missed — which is the to-do list for new rules. When it looks
+right:
+
+```bash
+npm run ledger:ingest
+```
+
+To run it on a schedule, edit the paths in `ledger/launchd/*.plist`, copy them
+to `~/Library/LaunchAgents/` and `launchctl load` each one. Ingestion every 15
+minutes, daily summary at 23:40, retrospectives weekly and monthly.
+
+`OPENAI_API_KEY` and `OPENAI_MODEL` are optional. Without them the deterministic
+layers still produce a ledger and genuinely ambiguous mail lands in the review
+queue instead of being guessed at.
 
 ---
 
@@ -116,7 +214,17 @@ src/
   utils.js           formatting, charts, modals, CSV, escaping
   vendor.js          bundled Chart.js / Grid.js / Font Awesome / Inter
   router.js          hash router
-  views/             dashboard, networth, fi, points, settings, login, app shell
+  views/             dashboard, networth, fi, points, ledger, settings, login, app shell
+  ledger/            pure event-ledger core — taxonomy, normalization, dedupe keys,
+                     email extraction, natural-language parsing, summaries.
+                     Imported unchanged by the browser, the jobs and the tests.
+ledger/              the ingestion jobs (Node, run locally under launchd)
+  cli.js             probe / ingest / summarize / tool / users / purge
+  connectors/        IMAP today; the interface any future source implements
+  extract/llm.js     the last rung of the extraction ladder
+  pipeline.js        extraction → dedupe → storage
+  tools.js           the Hermes tool layer
 supabase/migrations/ SQL
-test/                node:test suites for the pure maths
+docs/ledger.md       how the ledger works, end to end
+test/                node:test suites for the pure maths and the ledger core
 ```

@@ -1,0 +1,30 @@
+{
+  "//": "Copy to ledger/accounts.json (gitignored) and edit. Any number of accounts, any IMAP provider.",
+  "//password": "Prefer password_env or keychain_service over a literal password.",
+  "accounts": [
+    {
+      "key": "zoho:you@yourdomain.com",
+      "protocol": "imap",
+      "host": "imap.zoho.in",
+      "port": 993,
+      "secure": true,
+      "user": "you@yourdomain.com",
+      "keychain_service": "finance-hub-ledger",
+      "folders": ["INBOX"],
+      "lookback_days": 7,
+      "enabled": true
+    },
+    {
+      "key": "gmail:you@gmail.com",
+      "protocol": "imap",
+      "host": "imap.gmail.com",
+      "port": 993,
+      "secure": true,
+      "user": "you@gmail.com",
+      "password_env": "LEDGER_IMAP_PASSWORD_GMAIL",
+      "folders": ["INBOX"],
+      "lookback_days": 7,
+      "enabled": false
+    }
+  ]
+}

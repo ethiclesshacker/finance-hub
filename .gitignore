@@ -30,3 +30,10 @@ dist-ssr
 # Stray key material — belongs in ~/.ssh, never in a repo
 *_ssh_key*
 *.pem
+
+# Personal Event Ledger — local job secrets. Never commit these.
+.env.ledger
+ledger/accounts.json
+
+# Local cost ledger — operational data about this machine, not project state.
+ledger/costs.jsonl

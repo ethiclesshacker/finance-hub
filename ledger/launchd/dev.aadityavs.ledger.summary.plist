@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Daily summaries: 23:40, and again at 09:15 the next morning.
+
+  The second run is not a duplicate. A laptop is not a server: on any night the
+  lid is shut, the 23:40 run fires late, and by then "today" is a different day
+  — the day it was meant to summarise would never get one.
+
+  So the daily job does not summarise "today". It repairs the last seven days:
+  any day with events whose summary is missing or has gone stale is
+  regenerated, and a day with no events is left alone rather than given an
+  empty summary. That makes it idempotent and self-healing after a gap of any
+  length, and makes the morning run a cheap no-op when nothing was missed.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.aadityavs.ledger.summary</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>cd /Users/aadityavs/projects/finance-hub &amp;&amp; npm run ledger:summarize -- --period day --days 7</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>23</integer><key>Minute</key><integer>40</integer></dict>
+    <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>15</integer></dict>
+  </array>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/ledger-summary.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/ledger-summary.err</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

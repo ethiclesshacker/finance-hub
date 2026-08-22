@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Email ingestion, every 15 minutes.
+
+  Install:
+    cp ledger/launchd/*.plist ~/Library/LaunchAgents/
+    # edit the paths below to match this checkout, then:
+    launchctl load  ~/Library/LaunchAgents/dev.aadityavs.ledger.ingest.plist
+    launchctl start dev.aadityavs.ledger.ingest      # run once now
+
+  Watch it:
+    tail -f /tmp/ledger-ingest.log
+    npm run ledger:tool -- get_stats '{"date_range":"today"}'
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/dev.aadityavs.ledger.ingest.plist
+
+  RunAtLoad is on so a laptop that was asleep catches up as soon as it wakes,
+  rather than waiting out the rest of the interval. Ingestion is idempotent, so
+  an extra run costs nothing.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.aadityavs.ledger.ingest</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>cd /Users/aadityavs/projects/finance-hub &amp;&amp; npm run ledger:ingest</string>
+  </array>
+
+  <key>StartInterval</key>
+  <integer>900</integer>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/ledger-ingest.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/ledger-ingest.err</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+</dict>
+</plist>

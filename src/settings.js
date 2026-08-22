@@ -96,9 +96,66 @@ export const SETTINGS_SCHEMA = {
     type: 'number', default: 8, min: 0, max: 100, step: 0.5, group: 'Credit card',
     label: 'Reward rate target (%)', hint: 'Value returned as a percentage of spend.',
   },
+
+  // ── Event ledger ──────────────────────────────────────
+  //
+  // The spec is explicit that confidence thresholds must not be baked into the
+  // database. They live here as settings, and the SQL layer reads them through
+  // ledger_setting() with these same defaults — so tightening what counts as
+  // "reliable" is a settings change, not a migration.
+  ledger_timezone: {
+    type: 'string', default: 'Asia/Kolkata', group: 'Event ledger',
+    label: 'Timezone', hint: 'Which clock "today" and the daily summary are measured against.',
+  },
+  ledger_self_identifiers: {
+    type: 'string', default: '', group: 'Event ledger',
+    label: 'Your own names and handles',
+    hint: 'Comma-separated UPI handles, account names, VPAs. Transfers to these are recorded as moving your own money, not as spending.',
+  },
+  ledger_confidence_confirmed: {
+    type: 'number', default: 0.90, min: 0.5, max: 1, step: 0.01, group: 'Event ledger',
+    label: 'Confirmed above',
+    hint: 'Extractions at or above this are treated as fact. Deterministic rules score 0.90+; the model is capped below it, so anything it produced always shows as inferred.',
+  },
+  ledger_confidence_review: {
+    type: 'number', default: 0.75, min: 0.1, max: 1, step: 0.01, group: 'Event ledger',
+    label: 'Review below', hint: 'Below this, an event goes to the review queue instead of the timeline.',
+  },
+  ledger_dedupe_window_minutes: {
+    type: 'number', default: 180, min: 5, max: 1440, step: 5, group: 'Event ledger',
+    label: 'Duplicate window (minutes)',
+    hint: 'How far apart two sources can describe the same event. A card alert can lag the receipt by hours.',
+  },
+  ledger_dedupe_amount_tolerance: {
+    type: 'number', default: 0.02, min: 0, max: 0.5, step: 0.01, group: 'Event ledger',
+    label: 'Amount tolerance', hint: 'Fractional difference still counted as the same amount. 0.02 = 2%.',
+  },
+  ledger_dedupe_min_name_similarity: {
+    type: 'number', default: 0.30, min: 0, max: 1, step: 0.05, group: 'Event ledger',
+    label: 'Name disagreement floor',
+    hint: 'Below this similarity, two events are treated as different things even if the amount and time line up.',
+  },
+  ledger_dedupe_min_score: {
+    type: 'number', default: 0.6, min: 0.1, max: 1, step: 0.05, group: 'Event ledger',
+    label: 'Duplicate match threshold',
+    hint: 'Higher means fewer merges and more duplicates; lower risks merging two genuinely separate events.',
+  },
+  ledger_corroboration_bump: {
+    type: 'number', default: 0.03, min: 0, max: 0.2, step: 0.01, group: 'Event ledger',
+    label: 'Corroboration bump', hint: 'Confidence added when an independent source confirms an event.',
+  },
+  ledger_entity_similarity: {
+    type: 'number', default: 0.82, min: 0.5, max: 1, step: 0.01, group: 'Event ledger',
+    label: 'Entity match threshold', hint: 'How alike two names must be to be treated as the same merchant or person.',
+  },
+  ledger_snippet_retention_days: {
+    type: 'number', default: 90, min: 0, max: 3650, step: 1, group: 'Event ledger',
+    label: 'Keep email snippets for (days)',
+    hint: 'Cached body text is only for debugging an extraction. The source reference itself is kept forever.',
+  },
 };
 
-export const SETTING_GROUPS = ['Profile', 'Cashflow', 'Financial independence', 'Safety', 'Credit card'];
+export const SETTING_GROUPS = ['Profile', 'Cashflow', 'Financial independence', 'Safety', 'Credit card', 'Event ledger'];
 
 /** Defaults for every key, used before load and for any row the user has never saved. */
 function defaults() {

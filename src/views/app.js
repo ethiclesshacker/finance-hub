@@ -7,12 +7,14 @@ import { renderNetWorth } from './networth.js';
 import { renderPoints } from './points.js';
 import { renderFI } from './fi.js';
 import { renderSettings } from './settings.js';
+import { renderLedger } from './ledger.js';
 
 const NAV_ITEMS = [
   { id: 'dashboard', icon: 'fa-house',        label: 'Dashboard' },
   { id: 'networth',  icon: 'fa-chart-line',   label: 'Net Worth' },
   { id: 'fi',        icon: 'fa-bullseye',     label: 'FI Planner' },
   { id: 'points',    icon: 'fa-credit-card',  label: 'Points & Rewards' },
+  { id: 'ledger',    icon: 'fa-timeline',     label: 'Life' },
   { id: 'settings',  icon: 'fa-sliders',      label: 'Settings' },
 ];
 
@@ -22,6 +24,7 @@ export function renderApp(session) {
   registerRoute('networth',  renderNetWorth);
   registerRoute('points',    renderPoints);
   registerRoute('fi',        renderFI);
+  registerRoute('ledger',    renderLedger);
   registerRoute('settings',  renderSettings);
 
   const userEmail = session?.user?.email || '';
