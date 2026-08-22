@@ -311,6 +311,7 @@ declare
   v_entity_id uuid;
   v_related   uuid;
   v_src_type  text;
+  v_incoming_specific boolean := false;
 begin
   if not public.ledger_can_act_as(p_user_id) then
     raise exception 'not authorized for user %', p_user_id using errcode = '42501';
@@ -435,11 +436,31 @@ begin
       else public.ledger_status_for(p_user_id, v_conf)
     end;
 
+    -- Which source describes the event better?
+    --
+    -- A card alert knows an amount and a rail; the merchant's own receipt
+    -- knows what was bought. When they merge, whichever arrived first used to
+    -- win, so a Zomato order from Pizza Hut could end up titled "Zomato",
+    -- typed `purchase / card_transaction`, with the restaurant demoted to a
+    -- footnote. Facts still never get overwritten — this is only about which
+    -- of two true descriptions leads.
+    v_incoming_specific := coalesce(nullif(v_ev ->> 'subtype', ''), '') not in
+                             ('card_transaction', 'upi_payment', 'order', '')
+                       and v_existing.subtype in ('card_transaction', 'upi_payment');
+
     update public.events e set
       data            = coalesce(v_ev -> 'data', '{}'::jsonb) || e.data,   -- existing keys win
       inference       = e.inference || coalesce(v_ev -> 'inference', '{}'::jsonb),
       description     = coalesce(e.description, nullif(v_ev ->> 'description', '')),
-      subtype         = coalesce(e.subtype, nullif(v_ev ->> 'subtype', '')),
+      title           = case when v_incoming_specific
+                             then left(coalesce(nullif(v_ev ->> 'title', ''), e.title), 300)
+                             else e.title end,
+      type            = case when v_incoming_specific
+                             then coalesce(nullif(v_ev ->> 'type', ''), e.type)
+                             else e.type end,
+      subtype         = case when v_incoming_specific
+                             then nullif(v_ev ->> 'subtype', '')
+                             else coalesce(e.subtype, nullif(v_ev ->> 'subtype', '')) end,
       occurred_at_end = coalesce(e.occurred_at_end, nullif(v_ev ->> 'occurred_at_end', '')::timestamptz),
       confidence      = v_conf,
       status          = v_status

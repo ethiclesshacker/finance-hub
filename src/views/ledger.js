@@ -23,6 +23,7 @@ import {
 } from '../utils.js';
 
 let events = [];
+let summaries = {};
 let total = 0;
 let activeTab = 'timeline';       // timeline | review
 let filters = { query: '', types: [], statuses: [], sourceTypes: [], from: null, to: null };
@@ -35,28 +36,25 @@ export async function renderLedger(container) {
   filters = { query: '', types: [], statuses: [], sourceTypes: [], from: null, to: null };
 
   container.innerHTML = `
-    <div class="page-header">
+    <div class="page-header lg-header">
       <div class="page-header-left">
         <h2>Life</h2>
         <p>A structured record of what happened — mostly filled in by itself</p>
       </div>
-      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
-        <span id="lg-ingest-badge" class="badge badge-gray" title="Last ingestion run">
-          <i class="fas fa-circle-notch fa-spin" style="font-size:0.6rem"></i> Checking…
-        </span>
-        <button type="button" class="btn-sm btn-ghost" id="lg-export-btn">
-          <i class="fas fa-download"></i> Export
-        </button>
+      <div class="lg-header-right">
+        <div class="lg-stats" id="lg-stats"></div>
+        <div class="lg-header-actions">
+          <span id="lg-ingest-badge" class="badge badge-gray" title="Last ingestion run">
+            <i class="fas fa-circle-notch fa-spin" style="font-size:0.6rem"></i> Checking…
+          </span>
+          <button type="button" class="btn-sm btn-ghost" id="lg-export-btn">
+            <i class="fas fa-download"></i> Export
+          </button>
+        </div>
       </div>
     </div>
 
-    <div class="page-body">
-      <div class="kpi-grid kpi-grid--3col" id="lg-kpi-grid">
-        ${Array(4).fill(0).map(() => `
-          <div class="kpi-card"><div class="skeleton" style="height:90px;border-radius:var(--radius-md)"></div></div>
-        `).join('')}
-      </div>
-
+    <div class="page-body lg-body">
       <div class="table-section">
         <div class="table-toolbar">
           <div class="table-tabs">
@@ -68,26 +66,51 @@ export async function renderLedger(container) {
               <span class="kpi-badge neutral" id="lg-review-count" style="margin-left:0.35rem">0</span>
             </button>
           </div>
-          <div class="table-actions" style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
-            <select class="form-select lg-filter" id="lg-filter-type" style="width:auto;min-width:8.5rem">
-              <option value="">All types</option>
-              ${EVENT_TYPES.map(t => `<option value="${t.id}">${escapeHTML(t.label)}</option>`).join('')}
-            </select>
-            <select class="form-select lg-filter" id="lg-filter-source" style="width:auto;min-width:8.5rem">
-              <option value="">All sources</option>
-              ${SOURCE_TYPES.map(s => `<option value="${s.id}">${escapeHTML(s.label)}</option>`).join('')}
-            </select>
-            <select class="form-select lg-filter" id="lg-filter-status" style="width:auto;min-width:8.5rem">
-              <option value="">All states</option>
-              ${STATUSES.map(s => `<option value="${s.id}">${escapeHTML(s.label)}</option>`).join('')}
-            </select>
-            <input type="date" class="form-input lg-filter" id="lg-filter-from" style="width:auto" title="From" />
-            <input type="date" class="form-input lg-filter" id="lg-filter-to" style="width:auto" title="To" />
-            <div class="search-input-wrap">
+          <div class="lg-controls">
+            <div class="search-input-wrap lg-search">
               <i class="fas fa-search"></i>
-              <input type="text" class="search-input" id="lg-search" placeholder="Search the ledger…" />
+              <input type="text" class="search-input" id="lg-search" placeholder="Search the ledger" />
             </div>
-            <button type="button" class="btn-icon" id="lg-refresh-btn" title="Refresh" aria-label="Refresh">
+            <details class="lg-filters" id="lg-filters">
+              <summary title="Narrow the timeline">
+                <i class="fas fa-sliders" aria-hidden="true"></i>
+                <span>Filter</span>
+                <span class="lg-filter-count" id="lg-filter-count" hidden></span>
+              </summary>
+              <div class="lg-filter-grid">
+                <label class="lg-fact">
+                  <span>Type</span>
+                  <select class="form-select lg-filter" id="lg-filter-type">
+                    <option value="">Any</option>
+                    ${EVENT_TYPES.map(t => `<option value="${t.id}">${escapeHTML(t.label)}</option>`).join('')}
+                  </select>
+                </label>
+                <label class="lg-fact">
+                  <span>Source</span>
+                  <select class="form-select lg-filter" id="lg-filter-source">
+                    <option value="">Any</option>
+                    ${SOURCE_TYPES.map(t => `<option value="${t.id}">${escapeHTML(t.label)}</option>`).join('')}
+                  </select>
+                </label>
+                <label class="lg-fact">
+                  <span>State</span>
+                  <select class="form-select lg-filter" id="lg-filter-status">
+                    <option value="">Any</option>
+                    ${STATUSES.map(t => `<option value="${t.id}">${escapeHTML(t.label)}</option>`).join('')}
+                  </select>
+                </label>
+                <label class="lg-fact">
+                  <span>From</span>
+                  <input type="date" class="form-input lg-filter" id="lg-filter-from" />
+                </label>
+                <label class="lg-fact">
+                  <span>To</span>
+                  <input type="date" class="form-input lg-filter" id="lg-filter-to" />
+                </label>
+                <button type="button" class="btn-sm btn-ghost" id="lg-clear-filters">Clear all</button>
+              </div>
+            </details>
+            <button type="button" class="btn-icon" id="lg-refresh-btn" title="Check for new events" aria-label="Check for new events">
               <i class="fas fa-rotate-right"></i>
             </button>
           </div>
@@ -115,16 +138,36 @@ export async function renderLedger(container) {
     searchDebounce = setTimeout(loadData, 250);
   });
 
+  document.getElementById('lg-clear-filters').addEventListener('click', () => {
+    document.querySelectorAll('.lg-filter').forEach(el => { el.value = ''; });
+    filters = { ...filters, types: [], statuses: [], sourceTypes: [], from: null, to: null };
+    reflectFilterCount();
+    loadData();
+  });
+
   document.querySelectorAll('.lg-filter').forEach(el => el.addEventListener('change', () => {
     filters.types       = pick('lg-filter-type');
     filters.sourceTypes = pick('lg-filter-source');
     filters.statuses    = pick('lg-filter-status');
     filters.from = dayBoundary('lg-filter-from', false);
     filters.to   = dayBoundary('lg-filter-to', true);
+    reflectFilterCount();
     loadData();
   }));
 
+  reflectFilterCount();
   await loadData();
+}
+
+/** Show how many filters are on, so a narrowed timeline never looks empty. */
+function reflectFilterCount() {
+  const active = [...document.querySelectorAll('.lg-filter')].filter(el => el.value).length;
+  const badge = document.getElementById('lg-filter-count');
+  const wrap = document.getElementById('lg-filters');
+  if (!badge || !wrap) return;
+  badge.textContent = active;
+  badge.hidden = active === 0;
+  wrap.classList.toggle('is-active', active > 0);
 }
 
 function pick(id) {
@@ -161,11 +204,16 @@ async function loadData() {
   if (container) container.innerHTML = `<div class="skeleton" style="height:220px;border-radius:var(--radius-md)"></div>`;
 
   try {
-    const [result, review, runs] = await Promise.all([
+    const [result, review, runs, written] = await Promise.all([
       activeTab === 'review' ? api.reviewQueue(100) : api.searchEvents({ ...filters, limit: 200 }),
       api.reviewQueue(100),
       api.recentRuns(3).catch(() => []),
+      // Written nightly from the same events. Missing summaries are normal —
+      // a day the job has not reached yet simply has none.
+      api.dailySummaries(null, null).catch(() => ({})),
     ]);
+
+    summaries = written || {};
 
     events = result?.events || [];
     total = result?.total ?? events.length;
@@ -219,43 +267,44 @@ function renderIngestBadge(runs) {
 }
 
 function renderKPIs(reviewCount) {
-  const grid = document.getElementById('lg-kpi-grid');
-  if (!grid) return;
+  const strip = document.getElementById('lg-stats');
+  if (!strip) return;
 
-  const today = localDateISO(new Date(), timeZone());
-  const todayCount = events.filter(e => localDateISO(e.occurred_at, timeZone()) === today).length;
+  const zone = timeZone();
+  const today = localDateISO(new Date(), zone);
+  const weekAgo = localDateISO(new Date(Date.now() - 6 * 86_400_000), zone);
 
-  // Refunds and credits carry an amount but are not spending.
-  const spend = events.reduce((sum, e) => {
+  const spendOf = list => list.reduce((sum, e) => {
     const amount = Number(e.data?.amount);
     return sum + (Number.isFinite(amount) && !isInflow(e) ? amount : 0);
   }, 0);
 
+  const todayEvents = events.filter(e => localDateISO(e.occurred_at, zone) === today);
+  const weekEvents = events.filter(e => localDateISO(e.occurred_at, zone) >= weekAgo);
   const auto = events.filter(e => e.source_type !== 'manual' && e.source_type !== 'hermes').length;
   const autoPct = events.length ? Math.round((auto / events.length) * 100) : 0;
 
-  const cards = [
-    { label: 'Events shown', icon: '🗓️', glow: 'var(--accent-glow)', bg: 'rgba(56,189,248,0.1)',
-      value: String(events.length), sub: total > events.length ? `of ${total} matching` : 'all matching events' },
-    { label: 'Today', icon: '📍', glow: 'var(--teal-glow)', bg: 'rgba(45,212,191,0.1)',
-      value: String(todayCount), sub: todayCount ? 'recorded so far' : 'nothing recorded yet' },
-    { label: 'Spend in view', icon: '💸', glow: 'var(--purple-glow)', bg: 'rgba(167,139,250,0.1)',
-      value: formatINRFull(spend), sub: 'sum of amounts on these events' },
-    { label: 'Needs review', icon: '❓', glow: reviewCount ? 'var(--warning-glow)' : 'var(--success-glow)',
-      bg: reviewCount ? 'rgba(245,158,11,0.1)' : 'rgba(16,185,129,0.1)',
-      value: String(reviewCount), sub: `${autoPct}% of shown events arrived automatically` },
+  // These are reference numbers, not the content. As four cards they cost 292
+  // vertical pixels on a laptop and pushed the timeline — the actual point of
+  // the page — down to three visible rows.
+  const stats = [
+    { label: 'Today', value: todayEvents.length || '—',
+      note: todayEvents.length ? formatINRFull(spendOf(todayEvents)) : 'nothing yet' },
+    { label: '7 days', value: weekEvents.length, note: formatINRFull(spendOf(weekEvents)) },
+    { label: 'Automatic', value: `${autoPct}%`, note: `${auto} of ${events.length}` },
+    { label: 'To review', value: reviewCount, note: reviewCount ? 'needs a look' : 'all clear',
+      action: reviewCount ? 'review' : null },
   ];
 
-  grid.innerHTML = cards.map(card => `
-    <div class="kpi-card" style="--kpi-glow:${card.glow}">
-      <div class="kpi-header">
-        <span class="kpi-label">${escapeHTML(card.label)}</span>
-        <div class="kpi-icon" style="background:${card.bg}">${card.icon}</div>
-      </div>
-      <div class="kpi-value mono">${escapeHTML(card.value)}</div>
-      <div class="kpi-sub">${escapeHTML(card.sub)}</div>
-    </div>
+  strip.innerHTML = stats.map(stat => `
+    <${stat.action ? 'button type="button" class="lg-stat is-action" data-go="review"' : 'div class="lg-stat"'}>
+      <span class="lg-stat-value mono">${escapeHTML(String(stat.value))}</span>
+      <span class="lg-stat-label">${escapeHTML(stat.label)}</span>
+      <span class="lg-stat-note">${escapeHTML(stat.note)}</span>
+    </${stat.action ? 'button' : 'div'}>
   `).join('');
+
+  strip.querySelector('[data-go="review"]')?.addEventListener('click', () => switchTab('review'));
 }
 
 // ── Timeline ───────────────────────────────────────────
@@ -281,19 +330,41 @@ function renderTimeline() {
 
   container.innerHTML = `<div class="timeline">${[...days.entries()].map(([day, list]) => {
     const heading = day === today ? 'Today' : day === yesterday ? 'Yesterday' : formatDayHeading(day);
+    // Money out only. A refund landing on a Tuesday should not read as if the
+    // day cost less than it did.
     const dayTotal = list.reduce((sum, e) =>
       sum + (isInflow(e) ? 0 : (Number(e.data?.amount) || 0)), 0);
+    const written = summaries[day];
+
     return `
-      <div class="tl-day">
-        <div class="tl-day-head">
-          <span class="tl-day-label">${escapeHTML(heading)}</span>
-          <span class="tl-day-meta">
-            ${list.length} event${list.length === 1 ? '' : 's'}${dayTotal ? ` · ${escapeHTML(formatINRFull(dayTotal))}` : ''}
-          </span>
-        </div>
+      <section class="tl-day" aria-label="${escapeHTML(heading)}">
+        <header class="tl-day-head">
+          <div class="tl-day-id">
+            <span class="tl-day-label">${escapeHTML(heading)}</span>
+            <span class="tl-day-meta">
+              ${list.length} event${list.length === 1 ? '' : 's'}${dayTotal ? ` · ${escapeHTML(formatINRFull(dayTotal))}` : ''}
+            </span>
+          </div>
+          ${written?.summary ? `
+            <button type="button" class="tl-day-summary is-clamped"
+                    aria-expanded="false"
+                    title="Written from these events by ${escapeHTML(written.generated_by || 'the system')}">
+              ${escapeHTML(written.summary)}
+            </button>` : ''}
+        </header>
         ${list.map(renderRow).join('')}
-      </div>`;
+      </section>`;
   }).join('')}</div>`;
+
+  // A day's summary opens to full length on click. Clamped, it says enough to
+  // decide whether to read on; unclamped on every day, it buries the events it
+  // is describing — on a two-event day the paragraph was longer than the day.
+  container.querySelectorAll('.tl-day-summary').forEach(el => {
+    el.addEventListener('click', () => {
+      const open = el.classList.toggle('is-clamped') === false;
+      el.setAttribute('aria-expanded', String(open));
+    });
+  });
 
   container.querySelectorAll('.tl-item').forEach(row => {
     row.addEventListener('click', () => openDetail(row.dataset.id));
@@ -308,41 +379,65 @@ function renderRow(event) {
   const status = statusMeta(event.status);
   const source = sourceMeta(event.source_type);
   const amount = Number(event.data?.amount);
+  const inflow = isInflow(event);
 
-  // The metadata worth showing inline differs by type — an amount for a
-  // purchase, a route for a flight, who was there for a meeting.
+  // Everything that is not the amount. The amount used to appear twice — once
+  // inside the title the extractor wrote and again in this line — so it is now
+  // pulled out into its own right-hand column where the figures align down the
+  // day and can actually be compared.
   const bits = [];
-  if (Number.isFinite(amount)) bits.push(formatINRFull(amount));
   if (event.data?.origin && event.data?.destination) bits.push(`${event.data.origin} → ${event.data.destination}`);
   const where = event.data?.restaurant || event.data?.merchant || event.data?.place;
   if (where && !event.title.includes(where)) bits.push(where);
   const people = (event.entities || []).filter(e => e.type === 'person').map(e => e.name);
   if (people.length) bits.push(people.slice(0, 3).join(', '));
 
-  const needsAttention = event.status === 'needs_review' || event.status === 'inferred';
+  const needsReview = event.status === 'needs_review';
+  const scheduled = event.status === 'scheduled';
+  // `inferred` is the common case for extracted events, so a badge on every
+  // row would be wallpaper. It reads as a dimmed rule on the left edge
+  // instead, and only the genuinely uncertain get a badge.
+  const uncertain = event.status === 'inferred';
+
+  const title = stripTrailingAmount(event.title);
 
   return `
-    <div class="tl-item ${needsAttention ? 'tl-item--review' : ''}" data-id="${escapeHTML(event.id)}"
-         role="button" tabindex="0" aria-label="${escapeHTML(event.title)}">
-      <div class="tl-time mono">${escapeHTML(formatTime(event.occurred_at))}</div>
-      <div class="tl-icon" style="color:${type.color};background:${type.color}1a">
-        <i class="fas ${type.icon}" aria-hidden="true"></i>
+    <article class="tl-item ${needsReview ? 'is-review' : ''} ${uncertain ? 'is-inferred' : ''}"
+             data-id="${escapeHTML(event.id)}" role="button" tabindex="0"
+             aria-label="${escapeHTML(event.title)}">
+      <div class="tl-when">
+        <span class="tl-time mono">${escapeHTML(formatTime(event.occurred_at))}</span>
+        <span class="tl-src" title="From ${escapeHTML(source.label)}${event.source_count > 1 ? ` · ${event.source_count} sources agree` : ''}">
+          <i class="fas ${source.icon}" aria-hidden="true"></i>${event.source_count > 1 ? `<b>${event.source_count}</b>` : ''}
+        </span>
       </div>
+
+      <span class="tl-icon" style="--tint:${type.color}"><i class="fas ${type.icon}" aria-hidden="true"></i></span>
+
       <div class="tl-body">
-        <div class="tl-title">${escapeHTML(event.title)}</div>
+        <h3 class="tl-title">${escapeHTML(title)}</h3>
         <div class="tl-meta">
           <span class="tl-type" style="color:${type.color}">${escapeHTML(type.label)}${event.subtype ? ` · ${escapeHTML(event.subtype.replace(/_/g, ' '))}` : ''}</span>
           ${bits.map(b => `<span>${escapeHTML(b)}</span>`).join('')}
+          ${needsReview ? `<span class="tl-flag" title="${escapeHTML(status.hint)}">Needs review</span>` : ''}
+          ${scheduled ? `<span class="tl-flag is-scheduled" title="${escapeHTML(status.hint)}">Scheduled</span>` : ''}
         </div>
       </div>
-      <div class="tl-tags">
-        ${needsAttention ? `<span class="badge ${status.badge}" title="${escapeHTML(status.hint)}">${escapeHTML(status.label)}</span>` : ''}
-        ${event.status === 'scheduled' ? `<span class="badge badge-purple" title="${escapeHTML(status.hint)}">Scheduled</span>` : ''}
-        <span class="tl-source" title="From ${escapeHTML(source.label)}${event.source_count > 1 ? ` · ${event.source_count} sources agree` : ''}">
-          <i class="fas ${source.icon}" aria-hidden="true"></i>${event.source_count > 1 ? `<sup>${event.source_count}</sup>` : ''}
-        </span>
-      </div>
-    </div>`;
+
+      ${Number.isFinite(amount) ? `
+        <div class="tl-amount mono ${inflow ? 'is-in' : ''} ${!inflow && amount >= 5000 ? 'is-large' : ''}">
+          ${inflow ? '+' : ''}${escapeHTML(formatINRFull(amount))}
+        </div>` : '<div class="tl-amount"></div>'}
+    </article>`;
+}
+
+/**
+ * Extractors put the amount in the title ("Zomato — ₹140") because a title has
+ * to stand alone in a search result or a Hermes answer. In the timeline the
+ * amount has its own column, so printing it twice on one row is just noise.
+ */
+function stripTrailingAmount(title) {
+  return String(title).replace(/\s*[—–-]\s*[+]?[₹$€£]\s*[\d,]+(?:\.\d{1,2})?\s*$/, '').trim() || title;
 }
 
 function emptyState() {
@@ -421,19 +516,19 @@ async function openDetail(eventId) {
     <div class="modal-header">
       <div class="modal-title">
         <i class="fas ${type.icon}" style="color:${type.color};margin-right:0.5rem" aria-hidden="true"></i>
-        ${escapeHTML(event.title)}
+        ${escapeHTML(stripTrailingAmount(event.title))}
       </div>
       <button class="modal-close" id="lg-detail-close"><i class="fas fa-times"></i></button>
     </div>
 
     <div class="modal-body">
       <div class="lg-detail-head">
-        <div>
-          <div class="lg-detail-when mono">${escapeHTML(formatFullTime(event.occurred_at))}${
-            event.occurred_at_end ? ` → ${escapeHTML(formatTime(event.occurred_at_end))}` : ''}</div>
-          <div class="text-muted" style="font-size:0.82rem">
+        <div class="lg-detail-when">
+          <span class="mono">${escapeHTML(formatFullTime(event.occurred_at))}${
+            event.occurred_at_end ? ` → ${escapeHTML(formatTime(event.occurred_at_end))}` : ''}</span>
+          <span class="lg-detail-kind">
             ${escapeHTML(type.label)}${event.subtype ? ` · ${escapeHTML(event.subtype.replace(/_/g, ' '))}` : ''}
-          </div>
+          </span>
         </div>
         <div style="display:flex;gap:0.4rem;align-items:center;flex-wrap:wrap">
           <span class="badge ${status.badge}" title="${escapeHTML(status.hint)}">${escapeHTML(status.label)}</span>
@@ -517,15 +612,24 @@ function section(title, body, hint) {
 function renderFields(data) {
   const entries = Object.entries(data || {}).filter(([, v]) => v !== null && v !== undefined && v !== '');
   if (!entries.length) return '';
-  return `<div class="lg-fields">${entries.map(([key, value]) => `
-    <div class="lg-field">
-      <span class="lg-field-key">${escapeHTML(key.replace(/_/g, ' '))}</span>
-      <span class="lg-field-value mono">${escapeHTML(formatValue(key, value))}</span>
-    </div>`).join('')}</div>`;
+  return `<dl class="lg-facts">${entries.map(([key, value]) => {
+    const text = formatValue(key, value);
+    // Items lists, addresses and snippets need the whole row; a merchant or an
+    // amount does not, and pairing those two-up halves the height.
+    const wide = Array.isArray(value) || text.length > 38;
+    return `
+      <dt class="lg-fact-key">${escapeHTML(key.replace(/_/g, ' '))}</dt>
+      <dd class="lg-fact-value mono ${wide ? 'is-wide' : ''}">${escapeHTML(text)}</dd>`;
+  }).join('')}</dl>`;
 }
 
 function formatValue(key, value) {
-  if (key === 'amount' && Number.isFinite(Number(value))) return formatINRFull(Number(value));
+  // Exact here. The timeline rounds for scanning, but this section is the
+  // record of what a source stated, and ₹94.58 is not ₹95.
+  if (key === 'amount' && Number.isFinite(Number(value))) {
+    const amount = Number(value);
+    return Number.isInteger(amount) ? formatINRFull(amount) : `₹${amount.toFixed(2)}`;
+  }
   if (Array.isArray(value)) {
     return value.map(v => (typeof v === 'object' && v !== null ? (v.name || JSON.stringify(v)) : String(v))).join(', ');
   }

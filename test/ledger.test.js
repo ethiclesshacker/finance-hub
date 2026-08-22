@@ -25,7 +25,7 @@ import {
 } from '../src/ledger/email.js';
 import { parseQuickEntry } from '../src/ledger/nlparse.js';
 import { buildDigest, isInflow } from '../src/ledger/summary.js';
-import { slugSubtype } from '../ledger/extract/llm.js';
+import { slugSubtype, isLocalMidnight } from '../ledger/extract/llm.js';
 import { resolvePeriod } from '../ledger/jobs/summarize.js';
 
 const SELF = { selfAddresses: ['me@example.com'], timeZone: 'Asia/Kolkata' };
@@ -652,4 +652,15 @@ test('the monthly retrospective summarises the month that ended, in full', () =>
 
   // February, so the end-of-month arithmetic is doing real work.
   assert.equal(resolvePeriod('month', { today: '2026-03-02' }).end, '2026-02-28');
+});
+
+test('a model timestamp at local midnight is not a real time', () => {
+  // The model answers with midnight when the email states no time, producing
+  // rows reading 00:00 against emails that arrived at 19:24. The first guard
+  // tested whether the string contained a time — "…T00:00:00+05:30" does.
+  assert.equal(isLocalMidnight('2026-08-18T18:30:00.000Z', 'Asia/Kolkata'), true);   // 00:00 IST
+  assert.equal(isLocalMidnight('2026-08-19T00:00:00.000Z', 'Asia/Kolkata'), false);  // 05:30 IST
+  assert.equal(isLocalMidnight('2026-08-18T13:54:00.000Z', 'Asia/Kolkata'), false);  // 19:24 IST
+  // Same instant, different zone: midnight is a local fact.
+  assert.equal(isLocalMidnight('2026-08-19T00:00:00.000Z', 'UTC'), true);
 });

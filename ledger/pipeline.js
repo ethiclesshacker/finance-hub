@@ -109,7 +109,7 @@ export async function runPipeline({ userId, accountKey, selfAddresses = [], mess
       }
 
       const batch = llmCandidates.slice(offset, offset + batchSize);
-      const { results, calls, error, usage } = await extractWithLLM(batch.map(b => b.message), { selfIdentifiers });
+      const { results, calls, error, usage } = await extractWithLLM(batch.map(b => b.message), { selfIdentifiers, timeZone: config.timeZone });
       counters.llmCalls += calls;
       if (usage) {
         counters.llmUsage.prompt_tokens += usage.prompt_tokens || 0;

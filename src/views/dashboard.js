@@ -1,5 +1,6 @@
 import { Chart } from '../vendor.js';
 import { supabase } from '../supabase.js';
+import * as ledger from '../ledger/api.js';
 import { EUR_INR_FALLBACK } from '../constants.js';
 import * as settings from '../settings.js';
 import {
@@ -73,6 +74,22 @@ export async function renderDashboard(container) {
         </div>
       </div>
 
+      <!-- Life strip -->
+      <div class="chart-card" style="margin-top:1rem">
+        <div class="chart-header" style="margin-bottom:0">
+          <div>
+            <div class="chart-title">This month, actually</div>
+            <div class="chart-subtitle">Recorded spending, against what you budgeted</div>
+          </div>
+          <button type="button" class="btn-sm btn-accent" id="dash-goto-ledger">
+            Open Life <i class="fas fa-arrow-right" style="font-size:0.7rem"></i>
+          </button>
+        </div>
+        <div id="dash-life-strip">
+          <div class="skeleton" style="height:96px;border-radius:var(--radius-sm);margin-top:1rem"></div>
+        </div>
+      </div>
+
       <!-- Points strip -->
       <div class="chart-card" style="margin-top:1rem">
         <div class="chart-header" style="margin-bottom:0">
@@ -116,6 +133,7 @@ export async function renderDashboard(container) {
   });
 
   document.getElementById('dash-goto-points')?.addEventListener('click', () => navigateTo('points'));
+  document.getElementById('dash-goto-ledger')?.addEventListener('click', () => navigateTo('ledger'));
 
   await loadDashboardData();
 }
@@ -175,6 +193,10 @@ function showEmptyState() {
 }
 
 async function loadDashboardData() {
+  // The ledger is optional: the dashboard predates it and has to keep working
+  // when the migrations have not been run or nothing has been ingested yet.
+  renderLifeStrip().catch(() => hideLifeStrip());
+
   const [nwRes, txRes, rdRes, eurRate] = await Promise.all([
     supabase.from('net_worth_entries').select('*').order('date', { ascending: true }),
     supabase.from('cc_transactions').select('*'),
@@ -437,4 +459,87 @@ function buildAllocationChart(latest) {
       }
     }
   });
+}
+
+
+// ======================================================
+// This month, actually
+//
+// Every other number on this dashboard — savings rate, runway, time to FI —
+// is derived from `monthly_expenses`, a figure typed into Settings once. The
+// ledger knows what was actually spent. Putting the two side by side is the
+// only place in the app where the plan meets the record, which makes it worth
+// the strip it occupies.
+// ======================================================
+
+const LIFE_CATEGORY_LABELS = {
+  food_delivery: 'Food delivery', card_transaction: 'Card', upi_payment: 'UPI',
+  groceries: 'Groceries', utilities: 'Utilities', restaurant: 'Restaurants',
+  transport: 'Transport', shopping: 'Shopping', uncategorised: 'Uncategorised',
+};
+
+function hideLifeStrip() {
+  const strip = document.getElementById('dash-life-strip');
+  strip?.closest('.chart-card')?.remove();
+}
+
+async function renderLifeStrip() {
+  const strip = document.getElementById('dash-life-strip');
+  if (!strip) return;
+
+  const zone = settings.get('ledger_timezone') || 'Asia/Kolkata';
+  const now = new Date();
+  const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+  const from = new Date(`${monthStart}T00:00:00`).toISOString();
+
+  const stats = await ledger.stats(from, null);
+  const spent = Number(stats?.spend?.total) || 0;
+  const budget = settings.get('monthly_expenses');
+  const eventCount = Number(stats?.event_count) || 0;
+
+  if (!eventCount) { hideLifeStrip(); return; }
+
+  // Pace, not just position: a third of the way through the month, half the
+  // budget gone is the thing worth knowing.
+  const daysIn = now.getDate();
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const expected = budget * (daysIn / daysInMonth);
+  const overPace = expected > 0 && spent > expected * 1.1;
+  const pct = budget > 0 ? Math.min((spent / budget) * 100, 100) : 0;
+
+  const categories = Object.entries(stats?.spend?.by_category || {})
+    .sort((a, b) => b[1] - a[1]).slice(0, 4);
+
+  strip.innerHTML = `
+    <div class="life-strip">
+      <div class="life-spend">
+        <div class="life-spend-value mono">${escapeHTML(formatINRFull(spent))}</div>
+        <div class="life-spend-sub">
+          recorded across ${eventCount} event${eventCount === 1 ? '' : 's'} ·
+          budget ${escapeHTML(formatINRFull(budget))}
+        </div>
+        <div class="progress-wrap life-bar">
+          <div class="progress-bar ${overPace ? 'is-over' : ''}" style="width:${pct.toFixed(1)}%"></div>
+          <span class="life-pace" style="left:${Math.min((daysIn / daysInMonth) * 100, 100).toFixed(1)}%"
+                title="Where the month is: day ${daysIn} of ${daysInMonth}"></span>
+        </div>
+        <div class="life-spend-note ${overPace ? 'is-over' : ''}">
+          ${overPace
+            ? `Ahead of pace — ${escapeHTML(formatINRFull(spent - expected))} above where day ${daysIn} would put you.`
+            : `On pace. Day ${daysIn} of ${daysInMonth}.`}
+        </div>
+      </div>
+      <div class="life-cats">
+        ${categories.length ? categories.map(([key, value]) => `
+          <div class="life-cat">
+            <span class="life-cat-label">${escapeHTML(LIFE_CATEGORY_LABELS[key] || key.replace(/_/g, ' '))}</span>
+            <span class="life-cat-value mono">${escapeHTML(formatINRFull(value))}</span>
+          </div>
+        `).join('') : '<div class="life-cat"><span class="life-cat-label">No categorised spending yet</span></div>'}
+      </div>
+    </div>
+    <p class="life-caveat">
+      Only what reached your inbox. Cash and anything unemailed is not here.
+    </p>
+  `;
 }

@@ -65,6 +65,25 @@ export async function listEventTypes() {
   return data || [];
 }
 
+/**
+ * Generated summaries across a date range.
+ *
+ * A per-day RPC would mean one round trip per row of the timeline; the table
+ * is RLS-scoped, so a range read is both cheaper and simpler.
+ */
+export async function dailySummaries(fromDate, toDate) {
+  let query = supabase
+    .from('daily_summaries')
+    .select('date, summary, event_count, generated_by, generated_at')
+    .order('date', { ascending: false });
+  if (fromDate) query = query.gte('date', fromDate);
+  if (toDate) query = query.lte('date', toDate);
+
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  return Object.fromEntries((data || []).map(row => [row.date, row]));
+}
+
 /** The last few ingestion runs — the "is this thing on?" indicator. */
 export async function recentRuns(limit = 5) {
   const { data, error } = await supabase

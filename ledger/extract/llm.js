@@ -156,7 +156,19 @@ function toExtraction(raw, message, options = {}) {
     && (raw.people || []).length > 0
     && people.length === 0;
 
-  const occurredAt = safeDate(raw.occurred_at) || new Date(message.date).toISOString();
+  // A model with no time to work from answers with local midnight, which shows
+  // up in the timeline as a run of 00:00 rows against emails that arrived at
+  // 19:24. Judge the resulting instant, not the string: "…T00:00:00+05:30"
+  // does contain a time, so testing for one let every case through.
+  //
+  // A real event at exactly 00:00:00 local is vanishingly rare, and where the
+  // email itself arrived at midnight the fallback returns the same answer, so
+  // this cannot make a correct timestamp worse.
+  const stated = safeDate(raw.occurred_at);
+  const zone = options.timeZone || config.timeZone;
+  const occurredAt = (!stated || isLocalMidnight(stated, zone))
+    ? new Date(message.date).toISOString()
+    : stated;
   const merchant = raw.merchant ? canonicalMerchant(raw.merchant, raw.type === 'food' ? 'restaurant' : 'merchant') : null;
 
   const data = {};
@@ -181,7 +193,10 @@ function toExtraction(raw, message, options = {}) {
   return withKeys({
     type: raw.type,
     subtype: isSelf ? 'self_transfer' : slugSubtype(raw.subtype),
-    title: String(raw.title).slice(0, 300),
+    // Filtering the people list is not enough — the model also writes the name
+    // into the title ("Received bank transfer from Aditya Vikram Singhania"),
+    // which puts you in your own ledger as a counterparty to yourself.
+    title: isSelf ? 'Transfer between your own accounts' : String(raw.title).slice(0, 300),
     description: null,
     occurred_at: occurredAt,
     data,
@@ -210,6 +225,14 @@ export function slugSubtype(value) {
     .replace(/^_+|_+$/g, '')
     .slice(0, 48);
   return /^[a-z][a-z0-9_]{1,47}$/.test(slug) ? slug : null;
+}
+
+export function isLocalMidnight(iso, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone, hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(new Date(iso));
+  const at = Object.fromEntries(parts.map(p => [p.type, p.value]));
+  return `${at.hour}:${at.minute}:${at.second}` === '00:00:00';
 }
 
 function safeDate(value) {

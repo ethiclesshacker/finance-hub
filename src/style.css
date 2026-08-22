@@ -1031,9 +1031,11 @@ input, select, textarea {
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   width: 100%;
-  max-width: 520px;
+  max-width: 560px;
   max-height: 90vh;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   animation: modalSlideUp 0.2s ease-out;
   box-shadow: var(--shadow-lg);
 }
@@ -1156,10 +1158,15 @@ input, select, textarea {
 }
 
 .modal-footer {
-  padding: 1rem 1.5rem 1.5rem;
+  padding: 1rem 1.5rem 1.25rem;
   display: flex;
   gap: 0.75rem;
   justify-content: flex-end;
+  /* Pinned: the actions are the reason the modal is open, and on a long event
+     they used to sit below the fold behind a scroll. */
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
 }
 
 .btn-cancel {
@@ -1654,78 +1661,146 @@ input, select, textarea {
    LIFE / EVENT LEDGER
    ============================================================ */
 
-/* ---------- Timeline ---------- */
+/* ---------- Timeline ----------
+   Every other screen in this app is cards and charts: aggregates. A life
+   ledger is a sequence, so this is the one place with a genuine row rhythm —
+   a fixed left gutter for when-and-from-where, a flexible middle for what,
+   and a right column where the money lines up and can be compared down the
+   day. Nothing here is decorative; each column answers a question the record
+   has to answer.
+   ---------------------------------------------------------------- */
 .timeline {
-  padding: 0.25rem 0 1rem;
+  padding: 0.1rem 0 1rem;
 }
 
 .tl-day + .tl-day {
-  margin-top: 1.25rem;
+  margin-top: 1rem;
 }
 
 .tl-day-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 0.5rem 1rem 0.45rem;
+  background: linear-gradient(to bottom, var(--bg-card) 78%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+.tl-day-id {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.5rem 1rem;
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  /* The day heading has to stay readable over rows scrolling underneath it. */
-  background: linear-gradient(to bottom, var(--bg-card) 70%, transparent);
-  backdrop-filter: blur(4px);
 }
+
 .tl-day-label {
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   font-weight: 700;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-secondary);
 }
+
 .tl-day-meta {
-  font-size: 0.75rem;
+  font-size: 0.74rem;
   color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The summary the nightly job wrote from these very events. Set in the
+   accent, indented under the date, so a day reads as a short paragraph with
+   its evidence listed beneath it — which is what this system actually is. */
+.tl-day-summary {
+  display: block;
+  margin: 0.45rem 0 0;
+  padding: 0 0 0 0.75rem;
+  border: 0;
+  border-left: 2px solid var(--border-accent);
+  font: inherit;
+  font-size: 0.83rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  text-align: left;
+  max-width: 64ch;
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition);
+}
+.tl-day-summary:hover,
+.tl-day-summary:focus-visible { color: var(--text-primary); border-left-color: var(--accent); }
+
+/* Two lines is enough to decide whether to read on. At full length above a
+   two-event day, the paragraph was longer than the day it described. */
+.tl-day-summary.is-clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .tl-item {
   display: grid;
-  grid-template-columns: 3.25rem 2rem 1fr auto;
+  grid-template-columns: 3.6rem 1.9rem minmax(0, 1fr) auto;
   align-items: start;
-  gap: 0.75rem;
-  padding: 0.7rem 1rem;
+  gap: 0.8rem;
+  padding: 0.45rem 1rem;
   border-left: 2px solid transparent;
   cursor: pointer;
   transition: background var(--transition), border-color var(--transition);
 }
+
 .tl-item:hover,
 .tl-item:focus-visible {
   background: var(--bg-hover);
   border-left-color: var(--accent);
   outline: none;
 }
-/* Anything the system is unsure about is marked in the timeline itself, not
-   only in the review queue — an uncertain row should never read as a fact. */
-.tl-item--review {
-  border-left-color: var(--warning);
-  background: var(--warning-dim);
+
+/* Extracted-but-not-certain is the common case, so it is a dimmed edge rather
+   than a badge on every row — a badge that appears everywhere stops being
+   read. Genuine uncertainty gets the flag in .tl-flag instead. */
+.tl-item.is-inferred { border-left-color: rgba(148, 163, 184, 0.22); }
+.tl-item.is-review   { border-left-color: var(--warning); background: var(--warning-dim); }
+
+.tl-when {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  padding-top: 0.15rem;
 }
 
 .tl-time {
-  font-size: 0.8rem;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+/* Provenance sits with the timestamp, not exiled to the far right. Where a
+   claim came from is the point of this ledger, not an afterthought. */
+.tl-src {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  font-size: 0.62rem;
   color: var(--text-muted);
-  padding-top: 0.35rem;
-  font-variant-numeric: tabular-nums;
+}
+.tl-src b {
+  font-size: 0.58rem;
+  color: var(--accent);
+  font-weight: 700;
 }
 
 .tl-icon {
-  width: 2rem;
-  height: 2rem;
+  width: 1.9rem;
+  height: 1.9rem;
   border-radius: var(--radius-full);
   display: grid;
   place-items: center;
-  font-size: 0.8rem;
-  flex-shrink: 0;
+  font-size: 0.75rem;
+  color: var(--tint, var(--accent));
+  /* Flat fallback first: an unsupported color-mix would leave no tint at all. */
+  background: rgba(148, 163, 184, 0.10);
+  background: color-mix(in srgb, var(--tint, var(--accent)) 12%, transparent);
+  margin-top: 0.05rem;
 }
 
 .tl-body { min-width: 0; }
@@ -1733,63 +1808,90 @@ input, select, textarea {
 .tl-title {
   font-size: 0.9rem;
   font-weight: 600;
-  color: var(--text-primary);
   line-height: 1.35;
+  color: var(--text-primary);
   overflow-wrap: anywhere;
 }
 
 .tl-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-top: 0.2rem;
-  font-size: 0.76rem;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.15rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
 }
-.tl-meta > span + span::before {
+.tl-meta > span + span:not(.tl-flag)::before {
   content: '·';
-  margin-right: 0.5rem;
+  margin-right: 0.45rem;
   opacity: 0.5;
 }
 .tl-type { font-weight: 600; }
 
-.tl-tags {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding-top: 0.2rem;
+.tl-flag {
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 0.05rem 0.4rem;
+  border-radius: var(--radius-sm);
+  color: var(--warning);
+  background: var(--warning-dim);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+.tl-flag.is-scheduled {
+  color: var(--purple);
+  background: var(--purple-dim);
+  border-color: rgba(167, 139, 250, 0.25);
 }
 
-/* The source indicator is deliberately always present: an event with no
-   visible provenance is indistinguishable from one that was invented. */
-.tl-source {
-  color: var(--text-disabled);
-  font-size: 0.78rem;
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.1rem;
+/* One column, right-aligned, tabular: the figures stack into a readable
+   column down the day. Weight carries magnitude, so a ₹5,000 purchase is
+   visibly not a ₹95 one without needing a chart. */
+.tl-amount {
+  min-width: 5.5rem;
+  text-align: right;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding-top: 0.1rem;
 }
-.tl-source sup {
-  font-size: 0.6rem;
-  color: var(--accent);
-  font-weight: 700;
-}
+.tl-amount.is-large { font-size: 0.95rem; font-weight: 700; color: var(--text-primary); }
+.tl-amount.is-in    { color: var(--success); }
 
 /* ---------- Detail ---------- */
 .lg-detail-head {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  gap: 1rem;
+  align-items: center;
+  gap: 0.75rem 1rem;
   flex-wrap: wrap;
-  padding-bottom: 0.85rem;
+  padding-bottom: 0.6rem;
   border-bottom: 1px solid var(--border);
 }
+
+/* When and what on one line, state to the right. These were three stacked
+   blocks costing ~100px before a single fact appeared. */
 .lg-detail-when {
-  font-size: 0.92rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.88rem;
   font-weight: 600;
   color: var(--text-primary);
 }
+
+.lg-detail-kind {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+/* Without this the line reads as one run-on phrase: "18:28 Purchase · card
+   transaction". The date and the kind are two facts, not a sentence. */
+.lg-detail-kind::before { content: '·'; margin-right: 0.5rem; opacity: 0.55; }
+
+
 .lg-detail-desc {
   margin: 0.85rem 0 0;
   font-size: 0.85rem;
@@ -1797,7 +1899,7 @@ input, select, textarea {
   color: var(--text-secondary);
 }
 
-.lg-section { margin-top: 1.1rem; }
+.lg-section { margin-top: 0.85rem; }
 .lg-section-title {
   font-size: 0.72rem;
   font-weight: 700;
@@ -1818,23 +1920,47 @@ input, select, textarea {
   color: var(--text-disabled);
 }
 
-.lg-fields {
+.modal-body { overflow-y: auto; flex: 1; min-height: 0; }
+.modal-header { flex-shrink: 0; }
+
+/* A two-column definition list. These were flex rows with the key and value on
+   separate lines inside heavy bordered boxes: seven facts filled the whole
+   modal and had to be scrolled. Worse, the class was called .lg-field — the
+   same name the filter panel further down uses — so those rules were restyling
+   every fact into a stacked, uppercase form control. Distinct names now. */
+.lg-facts {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
-  gap: 0.4rem;
-}
-.lg-field {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.45rem 0.65rem;
+  grid-template-columns: minmax(5.5rem, auto) 1fr;
+  gap: 0.05rem 1rem;
+  align-items: baseline;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 0.8rem;
+  padding: 0.6rem 0.8rem;
 }
-.lg-field-key { color: var(--text-muted); text-transform: capitalize; }
-.lg-field-value { color: var(--text-primary); text-align: right; overflow-wrap: anywhere; }
+
+.lg-fact-key {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-transform: capitalize;
+  padding: 0.18rem 0;
+}
+
+.lg-fact-value {
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+  padding: 0.18rem 0;
+  margin: 0;
+}
+
+/* Two pairs per line. A dl in grid flow lays out dt,dd,dt,dd across the
+   columns on its own, so most events fit in half the height. Values that need
+   room — an items list, a long address — opt out and span the row. */
+@media (min-width: 620px) {
+  .lg-facts { grid-template-columns: minmax(5.5rem, auto) 1fr minmax(5.5rem, auto) 1fr; column-gap: 1.5rem; }
+  .lg-fact-value.is-wide { grid-column: 2 / -1; }
+}
 
 .lg-sources { display: flex; flex-direction: column; gap: 0.45rem; }
 .lg-source {
@@ -1927,15 +2053,229 @@ input, select, textarea {
 }
 .lg-advanced[open] > summary { margin-bottom: 0.6rem; }
 
+/* ---------- Life header ----------
+   Measured on a 1440x900 laptop, the old top of this page cost 583px before
+   the first event — 91 header + 292 of KPI cards + 72 toolbar + 128 day head —
+   leaving three rows visible in a 763px viewport. These figures are reference,
+   not content, so they became a strip on the header line rather than a band of
+   cards.
+   ---------------------------------------------------------------- */
+.lg-header { align-items: flex-start; padding-bottom: 0; }
+
+.lg-header-right { display: flex; flex-direction: column; align-items: flex-end; gap: 0.6rem; }
+.lg-header-actions { display: flex; gap: 0.5rem; align-items: center; }
+.lg-stats { display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }
+
+.lg-stat {
+  display: grid;
+  grid-template-columns: auto auto;
+  grid-template-areas: 'value label' 'value note';
+  align-items: center;
+  column-gap: 0.45rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  text-align: left;
+}
+
+.lg-stat-value { grid-area: value; font-size: 1.1rem; font-weight: 700; color: var(--text-primary); line-height: 1; }
+.lg-stat-label {
+  grid-area: label; font-size: 0.65rem; font-weight: 600; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--text-secondary); line-height: 1.2;
+}
+.lg-stat-note { grid-area: note; font-size: 0.65rem; color: var(--text-muted); line-height: 1.2; }
+
+.lg-stat.is-action { cursor: pointer; transition: border-color var(--transition); }
+.lg-stat.is-action:hover { border-color: var(--warning); }
+.lg-stat.is-action .lg-stat-value { color: var(--warning); }
+
+.lg-body { padding-top: 1rem; }
+.lg-body .table-toolbar { padding-top: 0.75rem; padding-bottom: 0.75rem; }
+
+/* ---------- Controls ----------
+   The filter row used to be five equal-weight grey dropdowns, three of them
+   reading "All —". It was the loudest thing on the page and said the least.
+   Search leads now; the filters fold away until they are used, and announce
+   themselves when they are, so a narrowed timeline never looks like an empty
+   one.
+   ---------------------------------------------------------------- */
+.lg-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.lg-search { flex: 1 1 22rem; max-width: 30rem; }
+
+.lg-filters > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.5rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  transition: border-color var(--transition), color var(--transition);
+}
+.lg-filters > summary::-webkit-details-marker { display: none; }
+.lg-filters > summary:hover { border-color: var(--border-hover); color: var(--text-primary); }
+.lg-filters.is-active > summary { border-color: var(--border-accent); color: var(--accent-light); }
+
+/* [hidden] loses to display:grid on specificity alone, so an inactive filter
+   button was advertising "0". */
+.lg-filter-count[hidden] { display: none; }
+
+.lg-filter-count {
+  min-width: 1.15rem;
+  height: 1.15rem;
+  padding: 0 0.3rem;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: var(--bg-dark);
+  font-size: 0.66rem;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+
+.lg-filter-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  padding: 0.9rem 1rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.lg-field { display: flex; flex-direction: column; gap: 0.25rem; }
+.lg-field > span {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.lg-field .form-select,
+.lg-field .form-input { width: auto; min-width: 8rem; }
+
+@media (max-width: 900px) {
+  .lg-header-right { align-items: stretch; width: 100%; }
+  .lg-stats { justify-content: flex-start; }
+  .lg-header-actions { justify-content: flex-start; }
+}
+
+@media (max-width: 720px) {
+  .lg-controls { justify-content: stretch; }
+  .lg-search { flex-basis: 100%; max-width: none; }
+  .lg-filter-grid { flex-direction: column; align-items: stretch; }
+  .lg-field .form-select, .lg-field .form-input { width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tl-item, .lg-filters > summary { transition: none; }
+}
+
 @media (max-width: 640px) {
+  /* The amount keeps its own line rather than being squeezed: on a narrow
+     screen a wrapped title beside a wrapped figure is unreadable. */
   .tl-item {
-    grid-template-columns: 3rem 1fr;
-    grid-template-areas: 'time body' '. tags';
-    row-gap: 0.35rem;
+    grid-template-columns: 3.4rem minmax(0, 1fr);
+    grid-template-areas: 'when body' 'when amount';
+    row-gap: 0.2rem;
   }
-  .tl-time { grid-area: time; }
+  .tl-when { grid-area: when; }
   .tl-icon { display: none; }
   .tl-body { grid-area: body; }
-  .tl-tags { grid-area: tags; }
+  .tl-amount { grid-area: amount; text-align: left; min-width: 0; padding-top: 0; }
+  /* The interpuncts are drawn before each item, so a line that wraps starts
+     with an orphaned dot. At this width the gap alone separates them. */
+  .tl-meta > span + span:not(.tl-flag)::before { content: none; margin: 0; }
+  .tl-day-summary { max-width: none; }
   .lg-history-row { grid-template-columns: 1fr; }
+}
+
+/* ---------- Dashboard: this month, actually ----------
+   The one place the plan (a budget typed into Settings) meets the record
+   (what the ledger observed). The pace marker matters more than the bar: half
+   the budget spent is fine on the 15th and not on the 5th.
+   ---------------------------------------------------------------- */
+.life-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 1.75rem;
+  margin-top: 1rem;
+  border-top: 1px solid var(--border);
+  padding-top: 1.1rem;
+}
+
+.life-spend-value {
+  font-size: 1.7rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  color: var(--text-primary);
+}
+
+.life-spend-sub {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  margin-top: 0.15rem;
+}
+
+.life-bar { position: relative; margin: 0.7rem 0 0.4rem; overflow: visible; }
+.life-bar .progress-bar.is-over { background: var(--warning); }
+
+/* Where the month has actually got to. */
+.life-pace {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  background: var(--text-secondary);
+  border-radius: 1px;
+}
+
+.life-spend-note { font-size: 0.76rem; color: var(--text-secondary); }
+.life-spend-note.is-over { color: var(--warning); }
+
+.life-cats {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  justify-content: center;
+  border-left: 1px solid var(--border);
+  padding-left: 1.5rem;
+}
+
+.life-cat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.8rem;
+}
+.life-cat-label { color: var(--text-secondary); text-transform: capitalize; }
+.life-cat-value { color: var(--text-primary); font-weight: 600; }
+
+.life-caveat {
+  margin-top: 0.85rem;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+@media (max-width: 720px) {
+  .life-strip { grid-template-columns: 1fr; gap: 1rem; }
+  .life-cats { border-left: 0; border-top: 1px solid var(--border); padding: 0.9rem 0 0; }
 }
