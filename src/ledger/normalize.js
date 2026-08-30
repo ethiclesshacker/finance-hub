@@ -76,6 +76,49 @@ const ALIASES = [
 ];
 
 /**
+ * Does this name belong to somewhere you eat?
+ *
+ * A card alert says "Rs 300 at SHRI MANJUNATHA FOODS" and nothing else. Filed
+ * as a purchase it lands on the Life timeline and never reaches the Food
+ * screen, so the one thing you might add — what you actually ate — has nowhere
+ * to go. The name is the only evidence in the mail, and for a restaurant it is
+ * usually enough.
+ *
+ * Deliberately a list of words that only appear in food businesses. "Hotel" is
+ * absent even though half the restaurants in India are called one, because the
+ * other half of the matches would be places you slept.
+ */
+const FOOD_WORDS = new RegExp([
+  'restaurants?', 'resto', 'foods?', 'kitchens?', 'cafes?', 'coffee', 'bakery', 'bakers',
+  'sweets?', 'mithai', 'dhaba', 'darshini', 'bhavan', 'bhawan', 'biryani', 'biriyani',
+  'dosa', 'idli', 'tiffin', 'chai', 'juice', 'ice\\s?cream', 'creamery', 'pizza', 'burger',
+  'momos?', 'rolls?', 'grill', 'kabab', 'kebab', 'barbeque', 'bbq', 'eatery', 'mess',
+  'canteen', 'food\\s?court', 'caterers?', 'catering', 'chaat', 'paratha', 'thali',
+  'dining', 'cafeteria', 'curry', 'rasoi',
+  'kulfi', 'shawarma', 'pastry', 'confection\\w*', 'brew\\w*', 'diner', 'bistro',
+  'sandwich\\w*', 'noodles?', 'sushi', 'tandoor\\w*', 'udupi', 'meals',
+].map(w => `\\b${w}\\b`).join('|'), 'i');
+
+// Categories that already say "food" without needing the name read.
+const FOOD_CATEGORIES = new Set(['food_delivery', 'cafe', 'restaurant', 'groceries']);
+
+/**
+ * True when a merchant is somewhere you ate — by what it is known to be, by
+ * what you have already recorded about it, or failing both, by its name.
+ *
+ * `known` is the set of normalized merchant names that already carry food
+ * events. It is what makes a correction stick: switch one card alert from
+ * purchase to food and every later alert from that merchant follows, without
+ * the name ever having to look like a restaurant.
+ */
+export function isFoodMerchant(merchant, known) {
+  if (!merchant) return false;
+  if (known?.has(merchant.normalized_name)) return true;
+  if (merchant.category && FOOD_CATEGORIES.has(merchant.category)) return true;
+  return FOOD_WORDS.test(merchant.name || '');
+}
+
+/**
  * Payment rails, not merchants.
  *
  * A card alert saying "EASEBUZZ PRIVATE LIMITED" tells you how the money moved,

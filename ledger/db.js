@@ -10,6 +10,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { config } from './config.js';
+import { normalizeName } from '../src/ledger/normalize.js';
 
 let client = null;
 
@@ -105,6 +106,32 @@ export function upsertPeriodSummary(userId, periodType, start, end, summary, sec
  */
 export function fingerprintStats(userId, days = 90) {
   return rpc('ledger_fingerprint_stats', { p_days: days, p_user_id: userId });
+}
+
+/**
+ * The merchants you have already eaten at.
+ *
+ * A card alert names a merchant and nothing else, so whether "BRAMBLE" was
+ * dinner or a hardware shop is not in the mail. It is in the ledger: if that
+ * name already carries a food event — because a receipt said so, or because
+ * you corrected one by hand — the next alert from it is a meal too. This is
+ * what makes a correction stick without a rule being written for it.
+ */
+export async function foodMerchants(userId, limit = 500) {
+  const result = await rpc('ledger_search_events', {
+    p_query: null, p_types: ['food'], p_subtypes: null, p_statuses: null, p_source_types: null,
+    p_entity_id: null, p_entity_name: null, p_from: null, p_to: null, p_min_confidence: null,
+    p_limit: limit, p_offset: 0, p_ascending: false, p_user_id: userId,
+  });
+
+  const names = new Set();
+  for (const event of result?.events || []) {
+    for (const name of [event.data?.restaurant, event.data?.merchant]) {
+      const normalized = normalizeName(name);
+      if (normalized) names.add(normalized);
+    }
+  }
+  return names;
 }
 
 /** One user setting, with the same defaults the SQL layer uses. */

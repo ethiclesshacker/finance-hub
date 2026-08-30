@@ -12,6 +12,7 @@
 
 import { config, loadAccounts } from '../config.js';
 import { getConnector } from '../connectors/index.js';
+import { foodMerchants, resolveUserId } from '../db.js';
 import { extractDeterministic, buildIngestPayload } from '../../src/ledger/email.js';
 
 const BOLD = s => `\x1b[1m${s}\x1b[0m`;
@@ -25,6 +26,17 @@ export async function probe(options = {}) {
   if (!accounts.length) throw new Error('No enabled accounts matched.');
 
   const totals = { seen: 0, bodies: 0, extracted: 0, llm: 0, rejected: 0, events: 0 };
+
+  // The real run classifies a card alert by whether you have eaten at that
+  // merchant before, so a probe that skipped it would show a different answer
+  // than the ingest it is meant to predict. Without a database, it simply has
+  // fewer merchants to recognise.
+  let knownFood = new Set();
+  try {
+    knownFood = await foodMerchants(await resolveUserId());
+  } catch {
+    console.log(DIM('  (no database reachable — merchants you have eaten at will not be recognised)'));
+  }
   const byExtractor = {};
   const byReason = {};
   const llmSamples = [];
@@ -52,6 +64,7 @@ export async function probe(options = {}) {
         timeZone: config.timeZone,
         selfAddresses: [account.user],
         selfIdentifiers: options.self ? String(options.self).split(',').map(v => v.trim()) : [],
+        foodMerchants: knownFood,
       });
 
       if (result.ruleErrors?.length) {

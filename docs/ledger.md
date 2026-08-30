@@ -228,6 +228,18 @@ knowing before changing the extraction code.
 - **A balance notice is not an event.** "Available balance in your account is
   Rs. 1,000.00" reports a state. Sent to the model, one came back as a ₹15,000
   credit that never happened.
+- **A card alert at a restaurant is a meal.** The mail states a merchant and an
+  amount and nothing else, so the event was a `purchase` — and a meal filed as
+  a purchase never reaches the Food screen, which is the one place its dishes
+  could be added. The merchant is now read three ways: the alias table's
+  category, a list of words that only appear in food businesses ("foods",
+  "dhaba", "dining" — but never "hotel", where half the matches would be places
+  you slept), and, decisively, **whether that merchant already carries a food
+  event in your ledger**. The last is what makes a correction stick: switch one
+  alert from purchase to food by hand and every later alert from that merchant
+  follows, with no rule written for it. The subtype stays `card_transaction`,
+  because that is still how the event was seen and it is what lets the
+  restaurant's own receipt take over the description if one arrives.
 - **The card issuer is not the merchant.** Linked as a `provider`, the bank
   accumulates the amount of every transaction on the card and becomes the
   largest merchant in the ledger. It is linked as `issuer`, counted but never

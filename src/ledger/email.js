@@ -24,7 +24,7 @@
 // ledger, and the rest lands in the review queue.
 // ======================================================
 
-import { canonicalMerchant, entityRef, isPaymentRail, normalizeName, parseAddress,
+import { canonicalMerchant, entityRef, isFoodMerchant, isPaymentRail, normalizeName, parseAddress,
          pickTotalAmount, parseDateParts, parseTimeParts, zonedISO } from './normalize.js';
 import { deriveDedupeKey, matchKeys } from './dedupe.js';
 import { parseOrderItems } from './items.js';
@@ -994,7 +994,7 @@ export const SENDER_RULES = [
       return /\b(payment of|paid|sent|payment successful|refund of)\b/i.test(combined)
           && (/\b(to|for)\s+[A-Z0-9]/.test(combined) || /payment\s+successful/i.test(m.subject || ''));
     },
-    extract: (m) => {
+    extract: (m, ctx) => {
       const body = `${m.subject || ''}\n${m.text || ''}`;
       // "Your refund of ₹143.44 for Zomato Limited is successful" is the same
       // sentence shape as a payment, pointing the other way.
@@ -1026,8 +1026,12 @@ export const SENDER_RULES = [
       const rail = canonicalMerchant((m.from?.address || '').split('@')[1]?.split('.')[0] || '', 'company');
       const ref = matchReference(body, /\b(?:transaction|txn|reference|utr|order)\s*(?:id|no\.?|number)?\s*[:#-]?\s*([A-Za-z0-9]{6,24})\b/i);
 
+      // Same as the card alert: a UPI payment to a restaurant is a meal seen
+      // from the payment's side, and belongs where meals are.
+      const food = !refund && isFoodMerchant(payee, ctx.foodMerchants);
+
       return withKeys({
-        type: refund ? 'transfer' : 'purchase',
+        type: refund ? 'transfer' : food ? 'food' : 'purchase',
         subtype: refund ? 'refund' : 'upi_payment',
         title: `${payee?.name || (refund ? 'Refund' : 'Payment')}${refund ? ' refund' : ''} — ${formatMoney(amount, 'INR')}`,
         occurred_at: new Date(m.date).toISOString(),
@@ -1143,10 +1147,20 @@ export const SENDER_RULES = [
 
       const occurred = resolveOccurredAt(m, text, ctx);
 
+      // A swipe at a restaurant is a meal the ledger happens to have seen from
+      // the bank's side. Typed as a purchase it never reaches the Food screen,
+      // which is the one place you would add what was on the plate — so where
+      // the merchant is somewhere you eat, the event is `food`.
+      //
+      // The subtype stays `card_transaction`: it is still how this was seen,
+      // and the merge rules use exactly that value to let a restaurant's own
+      // receipt take over the description when one arrives later.
+      const food = !credit && !selfTransfer && isFoodMerchant(merchant, ctx.foodMerchants);
+
       return withKeys({
         // Neither a credit nor a self-transfer is a purchase. Filing either as
         // one adds it to every spend total, so both become transfers.
-        type: (credit || selfTransfer) ? 'transfer' : 'purchase',
+        type: (credit || selfTransfer) ? 'transfer' : food ? 'food' : 'purchase',
         subtype: selfTransfer ? 'self_transfer'
                : credit ? (/\brefund/i.test(text) ? 'refund' : 'credit')
                : 'card_transaction',

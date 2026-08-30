@@ -17,7 +17,7 @@
 // ======================================================
 
 import { config } from './config.js';
-import { ingestEvent, fingerprintStats, setting } from './db.js';
+import { ingestEvent, fingerprintStats, foodMerchants, setting } from './db.js';
 import { extractDeterministic, buildIngestPayload } from '../src/ledger/email.js';
 import { extractWithLLM } from './extract/llm.js';
 
@@ -45,6 +45,17 @@ export async function runPipeline({ userId, accountKey, selfAddresses = [], mess
   const selfIdentifiers = String(await setting(userId, 'ledger_self_identifiers', ''))
     .split(',').map(v => v.trim()).filter(Boolean);
 
+  // Which merchants are places you eat. Read once per run and handed to the
+  // rules, so a card alert from a restaurant lands as a meal rather than as a
+  // purchase the Food screen never sees. A failure here costs classification,
+  // never the run.
+  let knownFood = new Set();
+  try {
+    knownFood = await foodMerchants(userId);
+  } catch (err) {
+    counters.errors.push({ stage: 'food_merchants', error: err.message });
+  }
+
   // ── Stage 1: deterministic extraction ────────────────
   const deterministic = [];
   const llmCandidates = [];
@@ -53,7 +64,9 @@ export async function runPipeline({ userId, accountKey, selfAddresses = [], mess
   for (const message of messages) {
     let result;
     try {
-      result = extractDeterministic(message, { timeZone: config.timeZone, selfAddresses, selfIdentifiers });
+      result = extractDeterministic(message, {
+        timeZone: config.timeZone, selfAddresses, selfIdentifiers, foodMerchants: knownFood,
+      });
     } catch (err) {
       counters.errors.push({ stage: 'extract', message: message.messageId, error: err.message });
       continue;

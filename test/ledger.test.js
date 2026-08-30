@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 
 import {
   normalizeName, canonicalMerchant, parseAmounts, pickTotalAmount,
-  parseDateParts, parseTimeParts, zonedISO, localDateISO, parseAddress,
+  parseDateParts, parseTimeParts, zonedISO, localDateISO, parseAddress, isFoodMerchant,
 } from '../src/ledger/normalize.js';
 import { dedupeKey, deriveDedupeKey } from '../src/ledger/dedupe.js';
 import {
@@ -953,4 +953,77 @@ test('dish names are cased so the ranking counts one dish once', () => {
   assert.equal(dishName('  maggi '), 'Maggi');
   // Already-capitalised words are left exactly as they are.
   assert.equal(dishName('Corn & Cheese Burger + Veg Pizza McPuff'), 'Corn & Cheese Burger + Veg Pizza McPuff');
+});
+
+// ── Food merchants ─────────────────────────────────────
+//
+// A card alert names a merchant and an amount. Whether that was dinner or a
+// hardware shop is not in the mail — and getting it wrong is not a cosmetic
+// mistake: a meal typed as a purchase never reaches the Food screen, which is
+// the one place the dishes could be added.
+
+test('a merchant is food by what it is known to be, what you recorded, or its name', () => {
+  const known = new Set(['bramble', 'puraani delhi msm']);
+
+  // By name, which is all a card alert ever gives you.
+  assert.equal(isFoodMerchant(canonicalMerchant('SHRI MANJUNATHA FOODS'), known), true);
+  assert.equal(isFoodMerchant(canonicalMerchant('District Dining'), known), true);
+  assert.equal(isFoodMerchant(canonicalMerchant('Milano Ice Cream Priva'), known), true);
+
+  // By category, for the merchants the alias table already knows.
+  assert.equal(isFoodMerchant(canonicalMerchant('CTRLX TECHNOLOGIES P'), known), true);   // Ownly
+  assert.equal(isFoodMerchant(canonicalMerchant('Zepto'), known), true);                 // groceries
+
+  // By what you have already recorded — the half that makes a correction
+  // stick. "Bramble" looks like nothing; you ate there, so the next alert
+  // from it is a meal without a rule being written.
+  assert.equal(isFoodMerchant(canonicalMerchant('Bramble'), known), true);
+  assert.equal(isFoodMerchant(canonicalMerchant('Bramble'), new Set()), false);
+
+  // And the things that are not food, whatever they spent.
+  assert.equal(isFoodMerchant(canonicalMerchant('Smartworks Tech Solutions'), known), false);
+  assert.equal(isFoodMerchant(canonicalMerchant('Shoppers Stop'), known), false);
+  assert.equal(isFoodMerchant(canonicalMerchant('Amazon'), known), false);
+  assert.equal(isFoodMerchant(null, known), false);
+});
+
+test('a card alert from a restaurant is a meal, not a purchase', () => {
+  const alert = (merchant) => ({
+    subject: 'Transaction alert',
+    text: `Your HSBC Credit Card ending with 5637 was used for a purchase transaction of INR 300.00 at ${merchant} on 30-08-26.`,
+    html: '', headers: {}, to, date: new Date('2026-08-30T15:34:00+05:30'),
+    from: { name: 'HSBC', address: 'hsbc@mail.hsbc.co.in' },
+  });
+
+  const [meal] = extractDeterministic(alert('SHRI MANJUNATHA FOODS'), SELF).extractions;
+  assert.equal(meal.type, 'food');
+  // The subtype still says how this was seen. It is also what the merge rules
+  // read to let the restaurant's own receipt take over the description if one
+  // turns up later, so it must stay `card_transaction`.
+  assert.equal(meal.subtype, 'card_transaction');
+  assert.equal(meal.data.amount, 300);
+
+  const [purchase] = extractDeterministic(alert('SHOPPERS STOP'), SELF).extractions;
+  assert.equal(purchase.type, 'purchase');
+
+  // What you have eaten before is carried in the context, so the same alert
+  // classifies differently once the ledger knows the place.
+  // The set holds normalized names, which is what the ledger stores and what
+  // the alert's descriptor normalizes to — "LLP" is not a corporate suffix the
+  // normalizer strips, so it is part of the name on both sides.
+  const ctx = { ...SELF, foodMerchants: new Set([normalizeName('TGIF OPULENCE LLP')]) };
+  assert.equal(extractDeterministic(alert('TGIF OPULENCE LLP'), SELF).extractions[0].type, 'purchase');
+  assert.equal(extractDeterministic(alert('TGIF OPULENCE LLP'), ctx).extractions[0].type, 'food');
+});
+
+test('money coming back is never a meal, whoever sent it', () => {
+  const refund = {
+    subject: 'Transaction alert',
+    text: 'INR 300.00 has been credited to your HSBC Credit Card ending with 5637 as a refund from SHRI MANJUNATHA FOODS.',
+    html: '', headers: {}, to, date: new Date('2026-08-30T15:34:00+05:30'),
+    from: { name: 'HSBC', address: 'hsbc@mail.hsbc.co.in' },
+  };
+  const [event] = extractDeterministic(refund, SELF).extractions;
+  assert.equal(event.type, 'transfer');
+  assert.equal(event.subtype, 'refund');
 });
