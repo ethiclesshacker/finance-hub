@@ -55,7 +55,7 @@ export async function fetchNew(account, cursor = {}, options = {}) {
 
   const messages = [];
   const nextCursor = { folders: { ...(cursor.folders || {}) } };
-  const stats = { seen: 0, skippedBySubject: 0, skippedTooLarge: 0, fetchedBodies: 0 };
+  const stats = { seen: 0, skippedBySubject: 0, skippedTooLarge: 0, fetchedBodies: 0, notReached: 0 };
 
   await client.connect();
   try {
@@ -105,7 +105,16 @@ export async function fetchNew(account, cursor = {}, options = {}) {
         // Cheap pass: reject on subject and size before downloading anything.
         const wanted = [];
         for (const candidate of candidates) {
-          if (wanted.length + messages.length >= maxMessages) break;
+          // The ceiling is per run, and candidates are in UID order, so what
+          // gets dropped is the *newest* mail in the window. On a backfill that
+          // is a silent hole: "--backfill-days 90" over a 2,000-message window
+          // read June and July and stopped, and the events it was run to
+          // repair kept their old shape. Count what was left so the run can
+          // say so rather than reporting success.
+          if (wanted.length + messages.length >= maxMessages) {
+            stats.notReached = candidates.length - wanted.length;
+            break;
+          }
 
           if (candidate.size && candidate.size > maxBytes) {
             stats.skippedTooLarge++;

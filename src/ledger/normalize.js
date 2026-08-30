@@ -43,6 +43,8 @@ const ALIASES = [
   // Ownly is CTRLX Tech on statements and card alerts; one entity, not two.
   { match: ['ownly', 'ctrlx', 'ctrl x'], name: 'Ownly', type: 'merchant', category: 'food_delivery' },
   { match: ['bigbasket'],     name: 'BigBasket',     type: 'merchant',   category: 'groceries' },
+  // The receipts come from dominos.co.in, which titlecases into "Dominos.Co.In".
+  { match: ['dominos', 'domino s'], name: "Domino's", type: 'merchant',  category: 'food_delivery' },
   { match: ['dunzo'],         name: 'Dunzo',         type: 'merchant',   category: 'delivery' },
   { match: ['uber'],          name: 'Uber',          type: 'merchant',   category: 'transport' },
   { match: ['ola'],           name: 'Ola',           type: 'merchant',   category: 'transport' },
@@ -156,7 +158,9 @@ function titleCase(s) {
     : s;
 
   return text.replace(/\s+/g, ' ')
-             .replace(/\b[a-z]/g, c => c.toUpperCase())
+             // Not after an apostrophe: \b puts one between the r and the s of
+             // "Ravi's", and the result reads as a shout — "Ravi'S Place".
+             .replace(/(^|[^A-Za-z'])([a-z])/g, (_, before, letter) => before + letter.toUpperCase())
              .slice(0, 200);
 }
 

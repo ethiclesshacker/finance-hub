@@ -23,7 +23,9 @@ import {
   triage, extractJsonLd, fromSchemaOrg, parseICS, fromICS, icsToISO,
   extractDeterministic, senderFingerprint, htmlToText, withKeys, isSelfPayee,
 } from '../src/ledger/email.js';
-import { parseQuickEntry } from '../src/ledger/nlparse.js';
+import { parseOrderItems, summariseItems, dishName } from '../src/ledger/items.js';
+import { mealSlot } from '../src/ledger/taxonomy.js';
+import { parseQuickEntry, parseMealEntry, parseMealItems } from '../src/ledger/nlparse.js';
 import { buildDigest, isInflow } from '../src/ledger/summary.js';
 import { slugSubtype, isLocalMidnight } from '../ledger/extract/llm.js';
 import { resolvePeriod } from '../ledger/jobs/summarize.js';
@@ -663,4 +665,292 @@ test('a model timestamp at local midnight is not a real time', () => {
   assert.equal(isLocalMidnight('2026-08-18T13:54:00.000Z', 'Asia/Kolkata'), false);  // 19:24 IST
   // Same instant, different zone: midnight is a local fact.
   assert.equal(isLocalMidnight('2026-08-19T00:00:00.000Z', 'UTC'), true);
+});
+
+// ── Line items ─────────────────────────────────────────
+//
+// Every body below is copied from real mail. The platforms all print the
+// basket in plain text, which is what makes "what did I eat" a free question
+// rather than a model call — and what makes these tests the only thing
+// standing between a template change and a silently empty plate.
+
+const orderMail = (address, subject, text) => ({
+  subject, text, html: '', headers: {}, to,
+  date: new Date('2026-08-26T06:12:02.000Z'),   // 11:42 IST
+  from: { name: null, address },
+});
+
+test('a Zomato receipt yields the dish, and the restaurant from the subject', () => {
+  const mail = orderMail('noreply@zomato.com', 'Your Zomato order from  Paakashala', [
+    'Zoooooooooooop! That was quick.',
+    'Your order from Paakashala was delivered in just 17 minutes .',
+    'ORDER ID: 8522155944',
+    'Delivered',
+    'Paakashala',
+    '310/73/85, Chalukaya Layout, Nagawara, Bangalore',
+    '1 X Cheese Masala Dosa',
+    'Total paid - ₹87.93',
+  ].join('\n\n'));
+
+  const order = parseOrderItems(mail);
+  assert.equal(order.vendor, 'Zomato');
+  assert.equal(order.kind, 'food_delivery');
+  // Two spaces after "from" in the real subject, and no trailing address.
+  assert.equal(order.restaurant, 'Paakashala');
+  assert.deepEqual(order.items, [{ name: 'Cheese Masala Dosa', qty: 1 }]);
+});
+
+test('a Swiggy bill separates the dishes from the fees charged alongside them', () => {
+  const mail = orderMail('noreply@swiggy.in', 'Your Swiggy order was successfully delivered', [
+    'ORDER JOURNEY',
+    "McDonald's",
+    'McDonalds Family Restaurants, RT Nagar Main Road, Bangalore - 560032',
+    'Order ID: 241725938677902',
+    'BILL DETAILS',
+    'Corn & Cheese Burger + Veg Pizza McPuff x1',
+    '₹195',
+    'Restaurant Packaging',
+    '₹19.05',
+    'Platform fee with GST',
+    '₹17.58',
+    'Discount Applied (SWIGGYIT)',
+    '- ₹78.00',
+    'Taxes',
+    '₹7.19',
+    'Paid Via AmazonPay',
+    '₹161.00',
+  ].join('\n\n'));
+
+  const order = parseOrderItems(mail);
+  // The restaurant, not the app. "Greetings from Swiggy" is how the body opens.
+  assert.equal(order.restaurant, "McDonald's");
+  assert.deepEqual(order.items, [
+    { name: 'Corn & Cheese Burger + Veg Pizza McPuff', qty: 1, amount: 195 },
+  ]);
+});
+
+test('a Swiggy customisation belongs to the dish above it, not to a dish of its own', () => {
+  const mail = orderMail('noreply@swiggy.in', 'Your Swiggy order was delivered before time', [
+    'ORDER JOURNEY', "Kapoor's Cafe", 'Order ID: 240677435935734',
+    'BILL DETAILS',
+    'Paneer Butter Masala Mini Thali x1',
+    '₹200',
+    'With Aloo Jeera (₹0)',
+    'Restaurant Packaging',
+    '₹20.00',
+    'Paid Via Credit/Debit card',
+  ].join('\n\n'));
+
+  assert.deepEqual(parseOrderItems(mail).items, [
+    { name: 'Paneer Butter Masala Mini Thali', qty: 1, amount: 200, options: 'With Aloo Jeera (₹0)' },
+  ]);
+});
+
+test('Swiggy’s older Item Name / Quantity / Price table still reads, under the same subject', () => {
+  const mail = orderMail('noreply@swiggy.in', 'Your Swiggy order was delivered superfast', [
+    'Ordered from:', 'A2B - Adyar Ananda Bhavan', 'No. 141, Thanisandra Main Road, Bangalore',
+    'Item Name', 'Quantity', 'Price',
+    'Paneer Grilled Sandwich', '1', '₹ 135',
+    'Madras Mixture 100gms', '1', '₹ 62.5',
+    'Item Total:', '₹ 197.50',
+  ].join('\n\n'));
+
+  const order = parseOrderItems(mail);
+  assert.equal(order.restaurant, 'A2B - Adyar Ananda Bhavan');
+  assert.deepEqual(order.items, [
+    { name: 'Paneer Grilled Sandwich', qty: 1, amount: 135 },
+    { name: 'Madras Mixture 100gms', qty: 1, amount: 62.5 },
+  ]);
+});
+
+test('Instamart is a grocery run, not a meal — and it posts from a Swiggy address', () => {
+  const mail = orderMail('noreply@swiggy.in', 'Your Instamart order was successfully delivered', [
+    'Your Instamart order id: 233348142557559 was successfully delivered.',
+    'Order Items',
+    "1 x Lay's Potato Chips - American Style Cream & Onion Flavour ₹20.00",
+    '2 x Thums Up Soft Drink Bottle ₹39.00',
+    'Order Summary',
+    'Item Bill ₹59.00',
+    'Handling Fee ₹10.62',
+  ].join('\n\n'));
+
+  const order = parseOrderItems(mail);
+  assert.equal(order.kind, 'groceries');
+  assert.equal(order.vendor, 'Instamart');
+  assert.deepEqual(order.items, [
+    { name: "Lay's Potato Chips - American Style Cream & Onion Flavour", qty: 1, amount: 20 },
+    { name: 'Thums Up Soft Drink Bottle', qty: 2, amount: 39 },
+  ]);
+  // The handling fee sits below "Order Summary" and must not become an item.
+  assert.ok(!order.items.some(i => /handling/i.test(i.name)));
+});
+
+test('a Domino’s pizza spans four lines: name, crust, quantity, price', () => {
+  const mail = orderMail('do-not-reply@dominos.co.in', 'Order Successful', [
+    'Order No. 66 | 07-04-2026 | 17:24:23',
+    'Order Total Rs.187.00',
+    'Items', 'Qty', 'Price',
+    'Margherita', 'Regular ', '|', 'Cheese Burst ', '1', '189.00',
+    'Coca Cola 475ml', '1', '66.66',
+    'Sub Total', ':', 'Rs.255.66',
+  ].join('\n\n'));
+
+  assert.deepEqual(parseOrderItems(mail).items, [
+    { name: 'Margherita', qty: 1, amount: 189, options: 'Regular, Cheese Burst' },
+    { name: 'Coca Cola 475ml', qty: 1, amount: 66.66 },
+  ]);
+});
+
+test('a marketing mail from a receipt address yields no basket and no meal', () => {
+  // "The next time you order…" and "We'll deliver even when you don't order"
+  // clear the promotional gate — there is no offer in them, just prose — and
+  // used to land as a meal from a restaurant called Zomato.
+  const mail = orderMail('noreply@mailers.zomato.com', 'The next time you order…',
+    'Remember, you have a choice — to choose what’s best for yourself and the planet.');
+
+  const result = extractDeterministic(mail, SELF);
+  assert.equal(result.extractions.length, 0);
+});
+
+test('a failed payment is not a meal', () => {
+  const mail = orderMail('noreply@swiggy.in', 'Alert : Payment Failed for your Order #228036798252397', [
+    'Your payment for Swiggy order #228036798252397 was not completed.',
+    'Order No:', '#228036798252397', 'Card/Netbanking Amount :', '₹ 249',
+  ].join('\n\n'));
+
+  const result = extractDeterministic(mail, SELF);
+  assert.equal(result.extractions.length, 0);
+  assert.equal(result.decision, 'reject');
+});
+
+test('the food rule carries the basket onto the event', () => {
+  const mail = orderMail('noreply@zomato.com', "Your Zomato order from Kapoor's Cafe", [
+    "Thank you for ordering from Kapoor's Cafe",
+    'ORDER ID: 8521045136',
+    '1 X Matar Paneer Mini Thali',
+    'Total paid - ₹168.58',
+  ].join('\n\n'));
+
+  const [event] = extractDeterministic(mail, SELF).extractions;
+  assert.equal(event.type, 'food');
+  assert.equal(event.data.restaurant, "Kapoor's Cafe");
+  // The platform stays the merchant: it is the name on the card statement, and
+  // the key both sources have to slug the same way.
+  assert.equal(event.data.merchant, 'Zomato');
+  assert.equal(event.data.items[0].name, 'Matar Paneer Mini Thali');
+  assert.equal(event.dedupe_key, 'order:zomato:8521045136');
+});
+
+test('summariseItems names two dishes and counts the rest', () => {
+  const items = [{ name: 'Idli', qty: 2 }, { name: 'Vada' }, { name: 'Filter Coffee' }];
+  assert.equal(summariseItems(items), '2× Idli, Vada +1 more');
+  assert.equal(summariseItems([{ name: 'Rajma Chawal' }]), 'Rajma Chawal');
+  assert.equal(summariseItems([]), null);
+});
+
+// ── Meals ──────────────────────────────────────────────
+
+test('the meal a plate counts as follows the clock, in the user’s zone', () => {
+  const at = (hhmm) => `2026-08-26T${hhmm}:00+05:30`;
+
+  // The boundaries themselves, which are the only interesting inputs.
+  assert.equal(mealSlot(at('00:00'), 'Asia/Kolkata'), 'snack');
+  assert.equal(mealSlot(at('04:29'), 'Asia/Kolkata'), 'snack');
+  assert.equal(mealSlot(at('04:30'), 'Asia/Kolkata'), 'breakfast');
+  assert.equal(mealSlot(at('12:14'), 'Asia/Kolkata'), 'breakfast');
+  assert.equal(mealSlot(at('12:15'), 'Asia/Kolkata'), 'lunch');
+  assert.equal(mealSlot(at('14:59'), 'Asia/Kolkata'), 'lunch');
+  assert.equal(mealSlot(at('15:00'), 'Asia/Kolkata'), 'snack');
+  assert.equal(mealSlot(at('18:59'), 'Asia/Kolkata'), 'snack');
+  assert.equal(mealSlot(at('19:00'), 'Asia/Kolkata'), 'dinner');
+  assert.equal(mealSlot(at('23:59'), 'Asia/Kolkata'), 'dinner');
+
+  // The zone is the user's, not the server's: one instant is lunch in
+  // Bangalore and breakfast in London.
+  assert.equal(mealSlot('2026-08-26T08:00:00.000Z', 'Asia/Kolkata'), 'lunch');      // 13:30 IST
+  assert.equal(mealSlot('2026-08-26T08:00:00.000Z', 'Europe/London'), 'breakfast'); // 09:00 BST
+
+  // Groceries are bought, not eaten. The hour they arrived says nothing.
+  assert.equal(mealSlot(at('01:00'), 'Asia/Kolkata', 'groceries'), 'groceries');
+  assert.equal(mealSlot('not a date', 'Asia/Kolkata'), null);
+});
+
+// ── Meals in words ─────────────────────────────────────
+//
+// Hermes writes meals through parseMealEntry, so these are the sentences it
+// has to survive. Every one of them is a thing a person actually types, and
+// the failure mode is silent: a dish read wrong is not an error, it is a
+// wrong answer to "what do I eat most".
+
+const AT_BREAKFAST = { now: new Date('2026-08-31T08:26:00+05:30'), timeZone: 'Asia/Kolkata' };
+
+test('a quantity in front of a unit is a count, and the unit is not the food', () => {
+  const { parsed } = parseMealEntry('I am making 2 packets maggi with a 3 cheese slices', AT_BREAKFAST);
+
+  // "packets" sits between the number and the name, so it is a container.
+  // "slices" comes after the name, so it is part of what the thing is called —
+  // position is the only thing that separates the two.
+  assert.deepEqual(parsed.items, [
+    { name: 'Maggi', qty: 2 },
+    { name: 'Cheese Slices', qty: 3 },
+  ]);
+  // "with a 3 cheese slices": read as the quantity, the article would make the
+  // 3 part of the dish's name.
+  assert.equal(parsed.items[1].qty, 3);
+  assert.equal(parsed.place, null);
+});
+
+test('a meal that has not happened yet is scheduled, and names no dishes', () => {
+  const { event, parsed } = parseMealEntry("going to Ravi's place for dinner", AT_BREAKFAST);
+
+  assert.equal(event.status, 'scheduled');           // a plan, not a record
+  assert.equal(parsed.place, "Ravi's Place");        // not "Ravi'S Place"
+  assert.deepEqual(parsed.items, []);                // dishes come later
+  assert.equal(parsed.occurred_at, '2026-08-31T14:30:00.000Z');   // 20:00 IST
+});
+
+test('the past tense never schedules a meal into the future', () => {
+  // Typed over breakfast, "had dinner" is last night's dinner. The meal's
+  // default hour is ahead of the clock, and scheduling it would file a meal
+  // that has been eaten as one that has not.
+  const { event, parsed } = parseMealEntry("had dinner at Kapoor's Cafe", AT_BREAKFAST);
+  assert.equal(event.status, 'confirmed');
+  assert.equal(parsed.occurred_at.slice(0, 10), '2026-08-30');
+  assert.equal(parsed.place, "Kapoor's Cafe");
+});
+
+test('a dash separates the occasion from the food', () => {
+  const { parsed } = parseMealEntry('lunch at home — rajma chawal', AT_BREAKFAST);
+  assert.deepEqual(parsed.items, [{ name: 'Rajma Chawal', qty: 1 }]);
+  // Eating at home is a fact about the meal, not a restaurant to remember.
+  assert.equal(parsed.place, null);
+});
+
+test('an unquantified dish counts only when a verb declared it was food', () => {
+  assert.deepEqual(parseMealItems('making maggi'), [{ name: 'Maggi', qty: 1 }]);
+  // Without one, a bare phrase is a circumstance, not a plate.
+  assert.deepEqual(parseMealItems("going to Ravi's place"), []);
+  // And the occasion is never a dish, however the sentence opened.
+  assert.deepEqual(parseMealItems("had dinner at Kapoor's Cafe"), []);
+});
+
+test('a meal reads its dishes, its place and its clock together', () => {
+  const { parsed } = parseMealEntry('had 2 idlis and a vada at Veena Stores at 7:30am', AT_BREAKFAST);
+  assert.deepEqual(parsed.items, [{ name: 'Idlis', qty: 2 }, { name: 'Vada', qty: 1 }]);
+  assert.equal(parsed.place, 'Veena Stores');
+  assert.equal(parsed.occurred_at, '2026-08-31T02:00:00.000Z');   // 07:30 IST
+  assert.ok(!parsed.assumed.includes('assumed_time'));
+});
+
+test('a price in a meal sentence is money, not a quantity', () => {
+  const { parsed } = parseMealEntry("dinner at Kapoor's Cafe yesterday, 450", AT_BREAKFAST);
+  assert.equal(parsed.amount, 450);
+  assert.deepEqual(parsed.items, []);
+});
+
+test('dish names are cased so the ranking counts one dish once', () => {
+  assert.equal(dishName('cheese slices'), 'Cheese Slices');
+  assert.equal(dishName('  maggi '), 'Maggi');
+  // Already-capitalised words are left exactly as they are.
+  assert.equal(dishName('Corn & Cheese Burger + Veg Pizza McPuff'), 'Corn & Cheese Burger + Veg Pizza McPuff');
 });

@@ -15,6 +15,7 @@
 import * as api from '../ledger/api.js';
 import { EVENT_TYPES, STATUSES, SOURCE_TYPES, typeMeta, statusMeta, sourceMeta } from '../ledger/taxonomy.js';
 import { parseQuickEntry } from '../ledger/nlparse.js';
+import { summariseItems } from '../ledger/items.js';
 import { localDateISO } from '../ledger/normalize.js';
 import { isInflow } from '../ledger/summary.js';
 import * as settings from '../settings.js';
@@ -156,6 +157,17 @@ export async function renderLedger(container) {
   }));
 
   reflectFilterCount();
+
+  // The filters are a panel floating over the timeline now, so they need the
+  // two things every panel needs: a click outside and Escape both close it.
+  const filterPanel = document.getElementById('lg-filters');
+  document.addEventListener('click', e => {
+    if (filterPanel.open && !e.target.closest('#lg-filters')) filterPanel.open = false;
+  });
+  filterPanel.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { filterPanel.open = false; filterPanel.querySelector('summary').focus(); }
+  });
+
   await loadData();
 }
 
@@ -200,6 +212,7 @@ async function switchTab(tab) {
 }
 
 async function loadData() {
+  afterMutate = loadData;
   const container = document.getElementById('lg-timeline');
   if (container) container.innerHTML = `<div class="skeleton skeleton--table"></div>`;
 
@@ -389,6 +402,11 @@ function renderRow(event) {
   if (event.data?.origin && event.data?.destination) bits.push(`${event.data.origin} → ${event.data.destination}`);
   const where = event.data?.restaurant || event.data?.merchant || event.data?.place;
   if (where && !event.title.includes(where)) bits.push(where);
+  // What was in the order, when the receipt listed it. On a food row this is
+  // the line worth reading: "Kapoor's Cafe" is where, "Matar Paneer Mini
+  // Thali" is what actually happened.
+  const basket = summariseItems(event.data?.items);
+  if (basket) bits.push(basket);
   const people = (event.entities || []).filter(e => e.type === 'person').map(e => e.name);
   if (people.length) bits.push(people.slice(0, 3).join(', '));
 
@@ -486,6 +504,22 @@ function formatDayHeading(day) {
 }
 
 // ── Detail ─────────────────────────────────────────────
+
+/**
+ * The event detail modal, opened from another screen.
+ *
+ * `onChange` is what to reload after a confirm, edit, merge or dismissal — the
+ * Food page needs its own list refreshed, not this one's. It is held on the
+ * module rather than threaded through every nested modal, because the edit and
+ * merge dialogs are opened *by* the detail modal and have to refresh the same
+ * caller.
+ */
+let afterMutate = loadData;
+
+export function openEventDetail(eventId, onChange) {
+  afterMutate = onChange || loadData;
+  return openDetail(eventId);
+}
 
 async function openDetail(eventId) {
   openModal(`
@@ -591,7 +625,7 @@ async function mutate(action, successMessage) {
     await action();
     showToast(successMessage);
     closeModal();
-    await loadData();
+    await afterMutate();
   } catch (err) {
     showToast(err.message, 'error');
   }

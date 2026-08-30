@@ -53,6 +53,15 @@ export async function ingestEmail(options = {}) {
         lookbackDays: backfillDays || undefined,
       });
 
+      // A run that hit the ceiling read only part of the window it was asked
+      // for, and the part it missed is the newest. Reported as an error so the
+      // run lands as `partial` and the gap is visible, rather than as a
+      // success that quietly did two thirds of the job.
+      if (stats.notReached > 0) {
+        stats.warning = `${stats.notReached} messages in the window were not read (per-run ceiling). `
+          + 'Re-run with a narrower --backfill-days, or a larger --limit.';
+      }
+
       const counters = await runPipeline({
         userId, accountKey: account.key, selfAddresses: [account.user],
         messages, dryRun: Boolean(options.dryRun),
@@ -61,6 +70,10 @@ export async function ingestEmail(options = {}) {
       // Only now, with every event committed.
       if (!options.dryRun) {
         await setCheckpoint(userId, connector.sourceType, account.key, nextCursor, true);
+      }
+
+      if (stats.notReached > 0) {
+        counters.errors.push({ stage: 'connector', error: stats.warning });
       }
 
       await finishRun(runId, {

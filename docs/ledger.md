@@ -110,6 +110,80 @@ Two mechanisms keep it there:
   It only ever suppresses negatives, so it cannot hide an event a rule would
   have caught.
 
+### Line items
+
+An amount says a meal cost ₹149. It does not say it was rajma chawal.
+
+Every delivery platform prints the basket in the plain-text body of its
+receipt, so `src/ledger/items.js` reads it as part of the same free rules layer
+— no model call, no PDF, no second request. What lands in `data.items` is
+`{name, qty, amount?, options?}` per dish, and the parser is keyed on the shape
+of the body rather than the subject, because two of these senders changed
+layout inside a year while keeping the subject identical.
+
+| Sender | Where the basket is | Per-item price |
+| --- | --- | --- |
+| Zomato | `1 X Cheese Masala Dosa` lines above `Total paid` | no — only in the attached invoice PDF |
+| Swiggy (2026) | `BILL DETAILS`: `<dish> x1`, amount on the next line | yes |
+| Swiggy (older) and Gourmet | an `Item Name / Quantity / Price` table | yes |
+| Instamart | `1 x <item> ₹20.00` under `Order Items` | yes |
+| Domino's | `Items / Qty / Price`, one pizza across four lines | yes |
+
+Measured against a year of real mail: **342 order receipts, 342 baskets, 0
+model calls.** What has no basket to read has one for a reason — a Swiggy
+Dineout or District bill is an offline meal paid through an app, and the
+restaurant never itemised it.
+
+The rest is typed, on the Food screen: a meal with no receipt at all (four
+things arrive from Blinkit as one grocery purchase; eating two of them on
+Tuesday evening is a different event on a different day, with no money
+attached) is recorded as its own `food/meal` event carrying only items. It is
+written with `allow_merge` off — with no amount to agree on, the fuzzy matcher
+has nothing but a timestamp, and it would fold the eating into the order that
+paid for it.
+
+Three things the platforms do that the parser has to survive:
+
+- **The delivery app is not the restaurant.** Swiggy's body opens "Greetings
+  from Swiggy", which satisfies every "ordered from X" pattern. Believing it
+  files every meal under a restaurant called Swiggy — and the deduplicator then
+  trusts that name. The restaurant comes from the `ORDER JOURNEY` heading, or
+  from Zomato's subject line, and a guessed name that merely repeats the
+  platform is discarded.
+- **Instamart is Swiggy, from Swiggy's address, signed by Swiggy.** Only the
+  subject separates a grocery run from a dinner, which is why `kind` is decided
+  there and not by the sender.
+- **The charges are worded like the dishes.** "Restaurant Packaging" and
+  "Platform fee with GST" sit in the same list as the food; only the items
+  carry a quantity, and the named charges are excluded outright.
+
+### Meals
+
+Which meal a plate counts as is derived from the clock at read time, never
+stored:
+
+| From | To | Meal |
+| --- | --- | --- |
+| 04:30 | 12:15 | Breakfast |
+| 12:15 | 15:00 | Lunch |
+| 15:00 | 19:00 | Snacks |
+| 19:00 | 00:00 | Dinner |
+| 00:00 | 04:30 | Snacks |
+
+The day starts at 04:30 rather than at midnight, so food ordered at 01:00 is
+the previous night's last snack instead of the next morning's breakfast. A
+grocery order is not a meal at any hour and is labelled as itself.
+
+The meal is a **label the event carries, not a section it sits in**. Grouping
+the Food screen into breakfast/lunch/snacks/dinner bands meant a row's position
+came from which band it belonged to rather than from when it happened — a 01:00
+snack sorted between lunch and dinner — and a day of four meals rendered four
+headers to group four single rows. As a label, the clock is the only sort key.
+
+Deriving rather than storing is what makes the boundaries movable: change one
+here (`MEAL_SLOTS` in `src/ledger/taxonomy.js`) and every meal in the ledger's
+history relabels itself, with nothing re-ingested and no row rewritten.
+
 ### What the parser learned the hard way
 
 Every rule below exists because real mail broke something. They are worth
@@ -158,6 +232,17 @@ knowing before changing the extraction code.
   accumulates the amount of every transaction on the card and becomes the
   largest merchant in the ledger. It is linked as `issuer`, counted but never
   credited with the spend.
+- **A campaign from a receipt address is still a campaign.** "The next time
+  you order…" carries no offer and no discount, so it clears the promotional
+  gate, and the food rule then read it as a meal from a restaurant called
+  Zomato. An order leaves something behind: an order number, a basket or an
+  amount. None of the three, no event.
+- **A failed payment is not a purchase.** "Alert : Payment Failed for your
+  Order #228036798252397" names the restaurant, the order number and the
+  amount of a meal that was never cooked.
+- **A cancelled order is not a meal either.** It reads exactly like a delivered
+  one; it is recorded as the refund it becomes, related to the order rather
+  than merged into it.
 - **You are not an entity in your own ledger.** Incoming self-transfers name
   you as the counterparty, in as many spellings as you have banks. People named
   by the model are filtered against `ledger_self_identifiers`.
@@ -254,8 +339,43 @@ explicit `p_user_id` and check `ledger_can_act_as()` rather than trusting it.
 node ledger/cli.js tool                       # list the tools
 node ledger/cli.js tool search_events '{"query":"amazon","date_range":"last 30 days"}'
 node ledger/cli.js tool create_event  '{"natural_language":"dinner at Nagarjuna last night, 1250"}'
+node ledger/cli.js tool log_meal      '{"natural_language":"2 packets maggi with 3 cheese slices"}'
 node ledger/cli.js tool get_stats     '{"date_range":"this month"}'
 ```
+
+#### Meals get their own pair of tools
+
+`create_event` records that a meal happened. The Food screen is built on
+*what was on the plate*, which is a harder question, so `log_meal` and
+`add_meal_items` answer it directly:
+
+| Sentence | What is written |
+| --- | --- |
+| "2 packets maggi with 3 cheese slices" | Maggi ×2, Cheese Slices ×3, now |
+| "had 2 idlis and a vada at Veena Stores at 7:30am" | two dishes at a named place, at the stated time |
+| "going to Ravi's place for dinner" | a `scheduled` meal at Ravi's Place, no dishes yet |
+| "lunch at home — rajma chawal" | one dish, no place: eating at home is not a restaurant |
+
+Three rules the parser follows, each of which exists because the alternative
+was wrong:
+
+- **A unit sits between the number and the name.** "2 packets maggi" is two
+  Maggi; "3 cheese slices" is three Cheese Slices. Position is the only thing
+  that separates a container from the food.
+- **The past tense never schedules.** "had dinner", typed over breakfast, is
+  last night's dinner — the meal's default hour is ahead of the clock, and
+  scheduling it would file an eaten meal as an intention.
+- **A number is what makes a phrase a dish**, unless a verb has already said
+  the sentence is about food. "making maggi" is a dish; "going to Ravi's place"
+  is a circumstance.
+
+`add_meal_items` is the other half of a plan: it appends to a meal already in
+the ledger, sums the quantity of a dish already listed rather than repeating
+it, and flips a `scheduled` meal to `confirmed` — knowing what was on the plate
+is evidence it happened. Both tools snap dish names to the spellings the ledger
+already holds, so "maggi" joins the Maggi you eat weekly instead of starting a
+second one, and both write with merging off: eating is not buying, and a meal
+with no amount would otherwise fold into the grocery order that paid for it.
 
 `docs/hermes-tools.json` is the same set in JSON-Schema function-calling form.
 Date ranges accept ISO dates, `{from,to}`, or phrases like `"last 30 days"`,

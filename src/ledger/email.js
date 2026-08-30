@@ -27,6 +27,7 @@
 import { canonicalMerchant, entityRef, isPaymentRail, normalizeName, parseAddress,
          pickTotalAmount, parseDateParts, parseTimeParts, zonedISO } from './normalize.js';
 import { deriveDedupeKey, matchKeys } from './dedupe.js';
+import { parseOrderItems } from './items.js';
 
 // ── Layer 1: triage ────────────────────────────────────
 //
@@ -46,6 +47,14 @@ const NEVER = [
   /\b(password\s+reset|reset\s+your\s+password|verify\s+your\s+(email|account)|sign[\s-]?in\s+(attempt|alert))\b/i,
   /\b(unsubscribe|newsletter|weekly\s+digest|daily\s+digest|blog\s+update)\b/i,
   /\b(webinar|survey|feedback|rate\s+your|review\s+your\s+(order|experience)|tell\s+us)\b/i,
+  // A payment that failed is not a transaction. The mail still names the
+  // restaurant, the order number and the amount, so left to the model it reads
+  // as a meal — and spends a call to arrive there.
+  /\bpayment\s+failed\b/i,
+  // A payment that failed is not a transaction. The mail still names the
+  // restaurant, the order number and the amount, so left alone it reads as a
+  // meal — and asking the model about it only spends money to be told so.
+  /\bpayment\s+failed\b/i,
   // A reminder is about something that has *not* happened. Recording it would
   // put a non-event in the ledger, and the real payment arrives by email later.
   /\b(payment\s+(overdue|due|reminder|pending)|overdue|due\s+(?:on|by|date)|pay\s+now|outstanding\s+(?:amount|balance)|renew(al)?\s+reminder|expiring\s+soon)\b/i,
@@ -1223,29 +1232,40 @@ export const SENDER_RULES = [
   {
     id: 'food_delivery',
     tier: 1,
-    when: m => /(swiggy|zomato|blinkit|zepto|instamart|ownly|ctrlx)/i.test(`${m.from?.address || ''} ${m.from?.name || ''}`) &&
+    when: m => /(swiggy|zomato|blinkit|zepto|instamart|ownly|ctrlx|dominos)/i.test(`${m.from?.address || ''} ${m.from?.name || ''}`) &&
                /\b(order|delivered|bill|receipt)\b/i.test(m.subject || ''),
     extract: (m) => {
       const body = `${m.subject || ''}\n${m.text || ''}`;
       const money = pickTotalAmount(body);
       const brand = canonicalMerchant(parseAddress(m.from?.address ? `<${m.from.address}>` : m.from).address?.split('@')[1] || m.from?.name);
-      const refunded = /\brefund/i.test(m.subject || '');
+      // A cancelled order is not a meal. It carries a restaurant, an order
+      // number and an amount exactly like a delivered one, and read as food it
+      // puts a dinner you never ate on the timeline.
+      const reversed = /\b(refund|cancell?(ed|ation))\b/i.test(m.subject || '');
       // Stop at punctuation or a status verb: "from Nagarjuna has been
       // delivered" must yield "Nagarjuna", not the rest of the sentence.
-      const restaurant = body.match(
+      const named = body.match(
         /\bfrom\s+([A-Z][A-Za-z0-9 .&'-]{1,40}?)(?=\s*(?:[,.!\n]|\bhas\b|\bis\b|\bwas\b|\bwill\b|\bdelivered\b|\bdispatched\b|\bon\b|\bfor\b|$))/);
       const orderId = matchReference(body, /\border\s*(?:id|#|no\.?)\s*[:#-]?\s*([A-Za-z0-9-]{5,24})\b/i);
-      const groceries = /(blinkit|zepto|instamart)/i.test(m.from?.address || '');
       const brandFromName = brand || canonicalMerchant(m.from?.name || '');
 
+      // "Alert : Payment Failed for your Order #228036798252397" names a
+      // restaurant and an order number for a meal that was never cooked. It is
+      // not a purchase and not a refund — nothing happened.
+      if (/\b(payment failed|failed|not completed|unsuccessful)\b/i.test(m.subject || '')) return null;
+
       const platform = brand?.name ? brand : brandFromName;
+
+      // The basket, and the two things only the body knows: which restaurant
+      // actually cooked it, and whether this was a meal or a grocery run.
+      const order = parseOrderItems(m);
 
       // "Refund initiated for order #8401094000" carries the order's number,
       // so without a key of its own it matches the order's dedupe key and is
       // absorbed into it — the refund disappears and the order keeps a value
       // that is no longer what was paid. It is a separate event that happens
       // to be *about* the order, which is what event_relations is for.
-      if (refunded) {
+      if (reversed) {
         const platformKey = platform?.normalized_name || 'unknown';
         return withKeys({
           type: 'transfer',
@@ -1271,20 +1291,50 @@ export const SENDER_RULES = [
         });
       }
 
+      // Instamart posts from a Swiggy address under a Swiggy sender name, so
+      // the sender cannot tell a grocery run from a dinner. Only the subject
+      // can, which is what parseOrderItems reads.
+      const groceries = order ? order.kind === 'groceries'
+                              : /(blinkit|zepto|instamart)/i.test(m.from?.address || '');
+
+      // "Greetings from Swiggy" satisfies the prose pattern, and taking it
+      // would record the delivery app as the restaurant — which then becomes
+      // the name the deduplicator trusts and the biggest eatery in the ledger.
+      const guessed = named?.[1]?.trim() || null;
+      const restaurant = order?.restaurant
+        || (guessed && normalizeName(guessed) !== platform?.normalized_name ? guessed : null);
+
+      const items = order?.items || [];
+
+      // "The next time you order…" and "We'll deliver even when you don't
+      // order" are campaigns that clear the promotional gate — no offer, no
+      // discount, just prose about ordering. They used to land as a meal from
+      // a restaurant called Zomato. An order leaves something behind: a
+      // number, a basket, or an amount. None of the three, no event.
+      if (!orderId && !money && !items.length) return null;
+
+      const where = restaurant || order?.vendor || platform?.name || 'Food delivery';
+
       return withKeys({
         type: 'food',
-        subtype: groceries ? 'groceries' : 'food_delivery',
-        title: `${restaurant ? restaurant[1].trim() : platform?.name || 'Food delivery'}${money ? ` — ${formatMoney(money.amount, money.currency)}` : ''}`,
+        subtype: groceries ? 'groceries' : order?.kind === 'dineout' ? 'restaurant' : 'food_delivery',
+        title: `${where}${money ? ` — ${formatMoney(money.amount, money.currency)}` : ''}`,
         occurred_at: new Date(m.date).toISOString(),
         data: prune({
-          restaurant: restaurant ? restaurant[1].trim() : null,
+          restaurant,
           merchant: platform?.name || null,
-          ordered_via: platform?.name || null,
+          // What you ate, as the receipt listed it. Names are facts the sender
+          // stated; only the meal it counts as is inferred, and that is
+          // derived from the clock at read time rather than stored.
+          items,
+          // The brand you ordered through, which is not always the company
+          // that sent the mail: Instamart and Swiggy share an address.
+          ordered_via: order?.vendor || platform?.name || null,
           amount: money?.amount ?? null, currency: money?.currency ?? null,
           order_id: orderId,
         }),
         entities: [
-          entityRef('restaurant', restaurant ? restaurant[1].trim() : null, 'restaurant'),
+          entityRef('restaurant', restaurant, 'restaurant'),
           entityRef('merchant', platform?.name, 'provider'),
         ].filter(Boolean),
         confidence: money ? 0.9 : 0.78,

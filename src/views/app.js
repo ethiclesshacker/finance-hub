@@ -8,6 +8,7 @@ import { renderPoints } from './points.js';
 import { renderFI } from './fi.js';
 import { renderSettings } from './settings.js';
 import { renderLedger } from './ledger.js';
+import { renderFood } from './food.js';
 
 // Private-mode Safari throws on localStorage, and a thrown preference must
 // not take the navigation down with it.
@@ -23,6 +24,7 @@ const NAV_ITEMS = [
   { id: 'fi',        icon: 'fa-bullseye',     label: 'FI Planner' },
   { id: 'points',    icon: 'fa-credit-card',  label: 'Points & Rewards' },
   { id: 'ledger',    icon: 'fa-timeline',     label: 'Life' },
+  { id: 'food',      icon: 'fa-utensils',     label: 'Food' },
   { id: 'settings',  icon: 'fa-sliders',      label: 'Settings' },
 ];
 
@@ -33,6 +35,7 @@ export function renderApp(session) {
   registerRoute('points',    renderPoints);
   registerRoute('fi',        renderFI);
   registerRoute('ledger',    renderLedger);
+  registerRoute('food',      renderFood);
   registerRoute('settings',  renderSettings);
 
   const userEmail = session?.user?.email || '';

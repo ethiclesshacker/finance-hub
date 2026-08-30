@@ -184,6 +184,107 @@
   {
     "type": "function",
     "function": {
+      "name": "log_meal",
+      "description": "Record a meal: what was eaten, where and when. Use natural_language for a phrase like \"2 packets maggi with 3 cheese slices\", \"had 2 idlis and a vada at Veena Stores at 7:30am\" or \"going to Ravi's place for dinner\" — the last of which is a plan, and is stored as `scheduled` with no dishes until there are dishes to add. Dish names are snapped to the spellings already in the ledger, so \"maggi\" joins the Maggi you have eaten before instead of starting a second one. A meal carries no amount unless one is stated: eating is not buying, and the grocery order that paid for it is its own event.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "natural_language": {
+            "type": "string",
+            "description": "One sentence about the meal."
+          },
+          "occurred_at": {
+            "type": "string",
+            "description": "ISO 8601. Overrides whatever the sentence implied."
+          },
+          "place": {
+            "type": "string",
+            "description": "Restaurant, shop or \"Ravi's place\". Omit for home."
+          },
+          "items": {
+            "type": "array",
+            "description": "What was eaten. Overrides the dishes read from the sentence.",
+            "items": {
+              "type": "object",
+              "required": [
+                "name"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "qty": {
+                  "type": "integer",
+                  "default": 1
+                },
+                "amount": {
+                  "type": "number",
+                  "description": "Per-item price, when the receipt stated one."
+                }
+              }
+            }
+          },
+          "amount": {
+            "type": "number",
+            "description": "What the meal cost, if it was paid for here."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "scheduled"
+            ],
+            "description": "Defaults to what the tense implies."
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "add_meal_items",
+      "description": "Add dishes to a meal already in the ledger — the \"I will tell you what I ate later\" half of log_meal. Pass event_id, or a date_range and the nearest food event in it is used. Quantities of a dish already listed are added together rather than duplicated, and a meal that was only planned becomes confirmed, since knowing what was on the plate is evidence it happened.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "date_range": {
+            "description": "Used when event_id is absent. Defaults to today."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "qty": {
+                  "type": "integer",
+                  "default": 1
+                },
+                "amount": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
       "name": "get_daily_summary",
       "description": "The stored summary for one day, with a live event count so a stale summary is visible as stale.",
       "parameters": {

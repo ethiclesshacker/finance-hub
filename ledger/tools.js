@@ -21,7 +21,8 @@
 
 import { config } from './config.js';
 import { db, resolveUserId } from './db.js';
-import { parseQuickEntry } from '../src/ledger/nlparse.js';
+import { parseQuickEntry, parseMealEntry } from '../src/ledger/nlparse.js';
+import { dishName, summariseItems } from '../src/ledger/items.js';
 import { localDateISO } from '../src/ledger/normalize.js';
 
 async function rpc(fn, args) {
@@ -236,6 +237,132 @@ export const TOOLS = {
       : rpc('ledger_dismiss_event', { p_event_id: args.event_id, p_reason: args.reason ?? null }),
   },
 
+  log_meal: {
+    description:
+      'Record a meal: what was eaten, where and when. Use natural_language for a phrase like '
+      + '"2 packets maggi with 3 cheese slices", "had 2 idlis and a vada at Veena Stores at 7:30am" or '
+      + '"going to Ravi\'s place for dinner" — the last of which is a plan, and is stored as `scheduled` '
+      + 'with no dishes until there are dishes to add. Dish names are snapped to the spellings already in '
+      + 'the ledger, so "maggi" joins the Maggi you have eaten before instead of starting a second one. '
+      + 'A meal carries no amount unless one is stated: eating is not buying, and the grocery order that '
+      + 'paid for it is its own event.',
+    parameters: {
+      type: 'object',
+      properties: {
+        natural_language: { type: 'string', description: 'One sentence about the meal.' },
+        occurred_at: { type: 'string', description: 'ISO 8601. Overrides whatever the sentence implied.' },
+        place: { type: 'string', description: 'Restaurant, shop or "Ravi\'s place". Omit for home.' },
+        items: {
+          type: 'array',
+          description: 'What was eaten. Overrides the dishes read from the sentence.',
+          items: {
+            type: 'object', required: ['name'],
+            properties: {
+              name: { type: 'string' },
+              qty: { type: 'integer', default: 1 },
+              amount: { type: 'number', description: 'Per-item price, when the receipt stated one.' },
+            },
+          },
+        },
+        amount: { type: 'number', description: 'What the meal cost, if it was paid for here.' },
+        status: { type: 'string', enum: ['confirmed', 'scheduled'], description: 'Defaults to what the tense implies.' },
+      },
+    },
+    handler: async (args) => {
+      const userId = await resolveUserId();
+      const parsed = args.natural_language
+        ? parseMealEntry(args.natural_language, { timeZone: config.timeZone })
+        : null;
+      if (args.natural_language && !parsed) throw new Error('Could not read a meal out of that phrase.');
+
+      const items = await snapDishes(args.items ?? parsed?.parsed.items ?? [], userId);
+      const place = args.place ?? parsed?.parsed.place ?? null;
+      const occurredAt = args.occurred_at ?? parsed?.parsed.occurred_at ?? new Date().toISOString();
+      const amount = args.amount ?? parsed?.parsed.amount ?? null;
+
+      if (!items.length && !place) {
+        throw new Error('A meal needs at least one dish or a place. "going to Ravi\'s for dinner" is enough; "ate" is not.');
+      }
+
+      const data = stripUndefined({
+        restaurant: place,
+        items: items.length ? items : undefined,
+        amount,
+        currency: amount ? 'INR' : undefined,
+        meal_type: parsed?.parsed.meal ?? undefined,
+      });
+
+      const result = await rpc('ledger_create_event', {
+        p_event: {
+          occurred_at: occurredAt,
+          type: 'food',
+          subtype: 'meal',
+          title: place || summariseItems(items, 3) || 'Meal',
+          description: args.natural_language ?? null,
+          data,
+          inference: parsed?.event.inference ?? {},
+          status: args.status ?? parsed?.parsed.status ?? 'confirmed',
+        },
+        p_entities: parsed?.event.entities?.length ? parsed.event.entities : [],
+        p_source_type: 'hermes',
+        // Eating is not buying. A meal with no amount gives the fuzzy matcher
+        // nothing but a timestamp, and it would fold "ate two things from the
+        // fridge" into the grocery order that paid for them.
+        p_allow_merge: false,
+        p_user_id: userId,
+      });
+
+      return { ...result, understood: { place, items, occurred_at: occurredAt, status: args.status ?? parsed?.parsed.status ?? 'confirmed' } };
+    },
+  },
+
+  add_meal_items: {
+    description:
+      'Add dishes to a meal already in the ledger — the "I will tell you what I ate later" half of log_meal. '
+      + 'Pass event_id, or a date_range and the nearest food event in it is used. Quantities of a dish '
+      + 'already listed are added together rather than duplicated, and a meal that was only planned becomes '
+      + 'confirmed, since knowing what was on the plate is evidence it happened.',
+    parameters: {
+      type: 'object', required: ['items'],
+      properties: {
+        event_id: { type: 'string' },
+        date_range: { description: 'Used when event_id is absent. Defaults to today.' },
+        items: {
+          type: 'array',
+          items: {
+            type: 'object', required: ['name'],
+            properties: { name: { type: 'string' }, qty: { type: 'integer', default: 1 }, amount: { type: 'number' } },
+          },
+        },
+      },
+    },
+    handler: async (args) => {
+      const userId = await resolveUserId();
+      if (!args.items?.length) throw new Error('Nothing to add.');
+
+      const event = args.event_id
+        ? await rpc('ledger_get_event', { p_event_id: args.event_id })
+        : await latestMeal(args.date_range ?? 'today', userId);
+      if (!event) throw new Error('No meal found to add to. Search for it first, or pass event_id.');
+
+      const merged = [...(event.data?.items ?? [])];
+      for (const item of await snapDishes(args.items, userId)) {
+        const existing = merged.find(i => sameName(i.name, item.name));
+        if (existing) existing.qty = (existing.qty || 1) + (item.qty || 1);
+        else merged.push(item);
+      }
+
+      const changes = { data: { items: merged } };
+      // A plan with a plate on it is not a plan any more.
+      if (event.status === 'scheduled') changes.status = 'confirmed';
+
+      const updated = await rpc('ledger_update_event', {
+        p_event_id: event.id, p_changes: changes, p_replace_data: false,
+      });
+      return { event_id: event.id, items: merged, status: updated?.status ?? changes.status ?? event.status };
+    },
+  },
+
   get_daily_summary: {
     description: 'The stored summary for one day, with a live event count so a stale summary is visible as stale.',
     parameters: { type: 'object', required: ['date'], properties: { date: { type: 'string', description: 'YYYY-MM-DD' } } },
@@ -337,6 +464,64 @@ export async function runTool(name, args = {}) {
   const tool = TOOLS[name];
   if (!tool) throw new Error(`Unknown tool "${name}". Available: ${Object.keys(TOOLS).join(', ')}`);
   return tool.handler(args);
+}
+
+const sameName = (a, b) =>
+  String(a).toLowerCase().replace(/\s+/g, ' ').trim() === String(b).toLowerCase().replace(/\s+/g, ' ').trim();
+
+/**
+ * Snap dish names to the spellings the ledger already holds.
+ *
+ * Without this, "maggi", "Maggi" and "MAGGI" are three dishes in the ranking of
+ * what you eat most, and the one you actually eat weekly looks like three
+ * things you tried once.
+ */
+async function snapDishes(items, userId) {
+  const list = (items || [])
+    .filter(item => item?.name && String(item.name).trim())
+    .map(item => ({
+      name: dishName(item.name),
+      qty: Number.isFinite(Number(item.qty)) && Number(item.qty) > 0 ? Math.round(Number(item.qty)) : 1,
+      ...(Number.isFinite(Number(item.amount)) ? { amount: Number(item.amount) } : {}),
+    }));
+  if (!list.length) return [];
+
+  let known = new Map();
+  try {
+    const result = await rpc('ledger_search_events', {
+      p_query: null, p_types: ['food'], p_subtypes: null, p_statuses: null, p_source_types: null,
+      p_entity_id: null, p_entity_name: null, p_from: null, p_to: null, p_min_confidence: null,
+      p_limit: 300, p_offset: 0, p_ascending: false, p_user_id: userId,
+    });
+    for (const event of result?.events || []) {
+      for (const item of event.data?.items || []) {
+        if (item?.name) known.set(String(item.name).toLowerCase().replace(/\s+/g, ' ').trim(), item.name);
+      }
+    }
+  } catch {
+    // A catalogue we could not read is a spelling we do not correct, not a
+    // meal we refuse to record.
+    known = new Map();
+  }
+
+  return list.map(item => ({ ...item, name: known.get(item.name.toLowerCase().replace(/\s+/g, ' ').trim()) || item.name }));
+}
+
+/** The food event nearest to now inside a range — "the dinner I mentioned". */
+async function latestMeal(range, userId) {
+  const { from, to } = resolveRange(range);
+  const result = await rpc('ledger_search_events', {
+    p_query: null, p_types: ['food'], p_subtypes: null, p_statuses: null, p_source_types: null,
+    p_entity_id: null, p_entity_name: null, p_from: from, p_to: to, p_min_confidence: null,
+    p_limit: 50, p_offset: 0, p_ascending: false, p_user_id: userId,
+  });
+  const events = result?.events || [];
+  if (!events.length) return null;
+
+  const now = Date.now();
+  const nearest = events.reduce((best, event) =>
+    Math.abs(new Date(event.occurred_at) - now) < Math.abs(new Date(best.occurred_at) - now) ? event : best);
+  return rpc('ledger_get_event', { p_event_id: nearest.id });
 }
 
 function stripUndefined(obj) {

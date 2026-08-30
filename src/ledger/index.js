@@ -3,6 +3,7 @@
 export * from './taxonomy.js';
 export * from './normalize.js';
 export * from './dedupe.js';
+export * from './items.js';
 export * from './email.js';
 export * from './nlparse.js';
 export { buildDigest, renderDigestText } from './summary.js';

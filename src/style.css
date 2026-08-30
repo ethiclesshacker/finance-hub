@@ -2754,7 +2754,7 @@ input, select, textarea {
    ---------------------------------------------------------------- */
 .lg-header { align-items: flex-start; padding-bottom: 0; }
 
-.lg-header-right { display: flex; flex-direction: column; align-items: flex-end; gap: 0.6rem; }
+.lg-header-right { display: flex; flex-direction: column; align-items: flex-end; gap: 0.6rem; flex: 1 1 auto; }
 .lg-header-actions { display: flex; gap: 0.5rem; align-items: center; }
 .lg-stats { display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }
 
@@ -2796,12 +2796,14 @@ input, select, textarea {
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  flex-wrap: wrap;
-  flex: 1;
+  flex-wrap: nowrap;
+  flex: 1 1 26rem;
   justify-content: flex-end;
 }
 
-.lg-search { flex: 1 1 22rem; max-width: 30rem; }
+/* The search gives way first: it is the only control that reads the same at
+   any width, and the others have a floor below which their labels are lost. */
+.lg-search { flex: 1 1 10rem; min-width: 0; max-width: 30rem; }
 
 .lg-filters > summary {
   display: inline-flex;
@@ -2839,16 +2841,29 @@ input, select, textarea {
   place-items: center;
 }
 
+/* Anchored to the button, floating over the timeline. Inline, this panel was a
+   500px block wedged into a flex row: it pushed the tabs into the middle of
+   the page and doubled the toolbar's height while it was open. */
+.lg-filters { position: relative; }
+
 .lg-filter-grid {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  /* Narrow enough to stay inside the card it hangs off: at 900px a 38rem panel
+     jutted past the left edge of the toolbar it belongs to. */
+  width: max-content;
+  max-width: min(30rem, 70vw);
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 0.75rem;
-  margin-top: 0.75rem;
   padding: 0.9rem 1rem;
   background: var(--bg-elevated);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-hover);
   border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
 }
 
 .lg-field { display: flex; flex-direction: column; gap: 0.25rem; }
@@ -2869,9 +2884,19 @@ input, select, textarea {
 }
 
 @media (max-width: 720px) {
-  .lg-controls { justify-content: stretch; }
+  .lg-controls { justify-content: stretch; flex-wrap: wrap; }
   .lg-search { flex-basis: 100%; max-width: none; }
-  .lg-filter-grid { flex-direction: column; align-items: stretch; }
+  /* Full width, so the panel it opens is too — as a content-width item its
+     fields were squeezed into the width of the word "Filter". */
+  .lg-filters { position: static; flex: 1 1 100%; }
+  .lg-filter-grid {
+    position: static;
+    width: auto;
+    max-width: none;
+    margin-top: 0.5rem;
+    flex-direction: column;
+    align-items: stretch;
+  }
   .lg-field .form-select, .lg-field .form-input { width: 100%; }
 }
 
@@ -2896,6 +2921,292 @@ input, select, textarea {
   .tl-meta > span + span:not(.tl-flag)::before { content: none; margin: 0; }
   .tl-day-summary { max-width: none; }
   .lg-history-row { grid-template-columns: 1fr; }
+}
+
+/* ---------- Food ----------
+   The Life timeline says what happened; this screen says what was on the
+   plate. It reuses the timeline's day sections and rows so the two read as one
+   record — the only new furniture is the meal band that splits a day, and the
+   basket printed under each order.
+   ---------------------------------------------------------------- */
+.fd-range { width: auto; min-width: 9rem; }
+
+/* The meal, named on the row rather than heading a section of it. A day of
+   four meals was four headers grouping four single rows — furniture as tall as
+   the content — and it decided the order, so a 01:00 snack sat between lunch
+   and dinner. As a label the row keeps its place in the clock. */
+.fd-tag {
+  /* Coloured, but not shouted: the tinted icon beside it already carries the
+     meal, so the word only has to name what the colour is saying. In caps and
+     700 it competed with the dish it belongs to, forty times down the page. */
+  font-weight: 600;
+  font-size: var(--fs-xs);
+}
+
+/* The dishes. Quantity in its own narrow column so the names line up, and the
+   per-item price right-aligned against the order total above it — when the
+   receipt states one. Zomato does not, which is why the column can be empty
+   without the row looking broken. */
+/* The dishes are the row's title on this page, so they carry the title's
+   weight and colour, and the restaurant drops to the meta line under them. */
+.fd-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  /* One grid for the whole order, with the rows dissolving into it, so the
+     dish names line up down a multi-item order instead of each row sizing its
+     own quantity column. `auto` for that column, not a fixed width: nearly
+     every order is one of a thing, and a reserved column would indent every
+     dish past an empty space. */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.1rem 0.35rem;
+  align-items: baseline;
+  font-size: var(--fs-base);
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-primary);
+}
+
+/* The columns are declared to match the cells the order actually renders.
+   A column with nothing in it is not free: `display:none` on an empty cell
+   takes it out of the grid, and every dish after it shifts one column left. */
+.fd-items.has-qty { grid-template-columns: auto minmax(0, 1fr); }
+.fd-items.has-amt { grid-template-columns: minmax(0, 1fr) auto; }
+.fd-items.has-qty.has-amt { grid-template-columns: auto minmax(0, 1fr) auto; }
+
+ /* The rows dissolve into the grid above, so every item must contribute the
+    same three cells — an omitted price would shift the next dish's quantity
+    into the price column and scatter the order across the row. */
+.fd-items li { display: contents; }
+
+.fd-qty { color: var(--text-muted); font-weight: 400; font-variant-numeric: tabular-nums; }
+.fd-item-name { overflow-wrap: anywhere; }
+.fd-item-opts { color: var(--text-muted); font-size: var(--fs-xs); font-weight: 400; }
+.fd-item-amt { color: var(--text-muted); font-weight: 400; font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+
+/* The two ways into the basket editor: a full invitation where there is no
+   basket at all, and a quiet pencil where there is one to correct. */
+/* Where a meal has no dishes recorded, the row says so in the place the dishes
+   would be — and clicking the row is what fills it in, so this is a label, not
+   a second button competing with the one it sits inside. */
+.fd-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.1rem 0.45rem 0.1rem 0.35rem;
+  border: 1px dashed var(--border-hover);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  transition: color var(--transition), border-color var(--transition);
+}
+.tl-item:hover .fd-add,
+.tl-item:focus-visible .fd-add { color: var(--accent); border-color: var(--border-accent); }
+
+/* Provenance, beside the time: which source this came from, and how many agree.
+   On this page it doubles as the way into the full event. */
+.fd-src {
+  border: 0;
+  background: none;
+  padding: 0.1rem 0.15rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.fd-src:hover, .fd-src:focus-visible { color: var(--accent); background: var(--bg-hover); outline: none; }
+
+/* ---------- Food: the basket editor ---------- */
+.fb-context {
+  margin: 0 0 1rem;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+.fb-context strong { color: var(--text-primary); font-weight: 600; }
+
+.fb-picker { position: relative; }
+
+.fb-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+}
+
+/* In the flow, not floating over it. An absolutely positioned panel inside a
+   scrolling modal body is clipped by that scroll container, which left six
+   dishes visible and the rest unreachable. Opening it pushes the form down and
+   the modal scrolls, which is the behaviour that actually works. */
+.fb-panel {
+  margin-top: 0.3rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+
+.fb-filter { margin-bottom: 0.4rem; }
+
+.fb-options {
+  max-height: 15rem;
+  overflow-y: auto;
+  display: grid;
+  gap: 0.1rem;
+}
+
+.fb-option {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.3rem 0.4rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.fb-option:hover, .fb-option:focus-visible { background: var(--bg-hover); outline: none; }
+.fb-option.is-on { color: var(--text-primary); }
+.fb-option.is-on i { color: var(--accent); }
+.fb-option-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fb-option-count { color: var(--text-muted); font-size: var(--fs-xs); }
+
+.fb-new { display: flex; gap: 0.5rem; align-items: center; }
+.fb-new-qty { width: 4.5rem; flex: none; }
+
+.fb-basket { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.25rem; }
+
+.fb-basket li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  font-size: var(--fs-sm);
+  color: var(--text-primary);
+}
+.fb-basket-name { overflow-wrap: anywhere; }
+
+.fb-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  color: var(--text-secondary);
+}
+.fb-stepper button,
+.fb-remove {
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.2rem 0.35rem;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+}
+.fb-stepper button:hover, .fb-stepper button:focus-visible { color: var(--accent); background: var(--bg-hover); outline: none; }
+.fb-remove:hover, .fb-remove:focus-visible { color: var(--danger); background: var(--danger-dim); outline: none; }
+.fb-stepper span { min-width: 1.1rem; text-align: center; }
+
+.fb-none { margin: 0; padding: 0.5rem 0; font-size: var(--fs-sm); color: var(--text-muted); }
+
+/* The gap filter. Off, it is a count of what is still missing; on, it is the
+   loudest control in the toolbar, because it hides most of the page. */
+.fd-gap-toggle { white-space: nowrap; }
+.fd-gap-toggle:disabled { opacity: 0.45; cursor: default; }
+.fd-gap-toggle.is-on {
+  color: var(--accent);
+  border-color: var(--border-accent);
+  background: var(--accent-dim);
+}
+.fd-gap-count {
+  margin-left: 0.15rem;
+  padding: 0 0.3rem;
+  border-radius: var(--radius-full);
+  background: rgba(148, 163, 184, 0.16);
+  font-variant-numeric: tabular-nums;
+}
+.fd-gap-toggle.is-on .fd-gap-count { background: var(--accent-glow); }
+
+/* ---------- Food: dishes ---------- */
+/* A dish is four short values. As full-width rows they used a laptop's whole
+   width to show three of them and put the ranking two screens deep; as cards
+   the top twenty are visible at once, which is what a ranking is for. */
+.fd-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 0.6rem;
+  padding: 0.75rem 1rem 1.25rem;
+}
+
+.fd-card {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--transition), background var(--transition);
+}
+
+.fd-card:hover,
+.fd-card:focus-visible {
+  border-color: var(--border-accent);
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.fd-card-top { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
+
+.fd-card-count {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.fd-card-share { font-size: var(--fs-xs); color: var(--accent); font-variant-numeric: tabular-nums; }
+
+/* Two lines, then ellipsis: "Schezwan Fried Rice with Veg and Paneer
+   Manchurian Gravy" must not make its card twice the height of its neighbours
+   and break the grid's rhythm. */
+.fd-card-name {
+  font-size: var(--fs-sm);
+  color: var(--text-primary);
+  line-height: var(--lh-snug);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 2.3em;
+}
+
+.fd-card-meta {
+  display: flex;
+  gap: 0.4rem;
+  justify-content: space-between;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  min-width: 0;
+}
+.fd-card-where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fd-card-last { flex: none; }
+
+.fd-card-spend { font-size: var(--fs-xs); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+@media (max-width: 640px) {
+  .fd-cards { grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr)); gap: 0.5rem; }
+  .fd-items { gap: 0.1rem 0.3rem; }
 }
 
 /* ---------- Dashboard: this month, actually ----------
