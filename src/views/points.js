@@ -6,7 +6,7 @@ import {
   formatINR, formatINRFull, formatPercent, formatDate, todayISO,
   destroyChart, makeCopyable, downloadCSV, escapeHTML, cssVar,
   openModal, closeModal, showToast, parseNum, fetchEURtoINR, CHART_COLORS, renderKpiCards,
-  numCell, rowActions,
+  numCell, rowActions, comboboxHTML, wireCombobox,
 } from '../utils.js';
 
 // Grid.js applies these to both the header cell and every body cell in the
@@ -591,12 +591,22 @@ function openForm(data, type) {
       </div>
     </div>
     <div class="form-group">
-      <label class="form-label">Merchant</label>
-      <input type="text" class="form-input" id="pt-f-merchant" placeholder="e.g. Swiggy, Amazon, Zara" value="${escapeHTML(data?.merchant || '')}" />
+      <label class="form-label" for="pt-f-merchant">Merchant</label>
+      ${comboboxHTML({
+        id: 'pt-f-merchant',
+        value: data?.merchant || '',
+        placeholder: 'Search or type a new one',
+        options: usedBefore(t => t.merchant),
+      })}
     </div>
     <div class="form-group">
-      <label class="form-label">Description (optional)</label>
-      <input type="text" class="form-input" id="pt-f-desc" placeholder="Brief note" value="${escapeHTML(data?.description || '')}" />
+      <label class="form-label" for="pt-f-desc">Description (optional)</label>
+      ${comboboxHTML({
+        id: 'pt-f-desc',
+        value: data?.description || '',
+        placeholder: 'Search or type a new one',
+        options: usedBefore(t => t.description),
+      })}
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -623,12 +633,20 @@ function openForm(data, type) {
         <input type="date" class="form-input" id="pt-f-date" value="${escapeHTML(data?.date || todayISO())}" />
       </div>
       <div class="form-group">
-        <label class="form-label">Partner</label>
-        <select class="form-select" id="pt-f-partner">
-          ${REDEMPTION_PARTNERS.map(p => `
-            <option value="${escapeHTML(p)}" ${data?.partner === p ? 'selected' : ''}>${escapeHTML(p)}</option>
-          `).join('')}
-        </select>
+        <label class="form-label" for="pt-f-partner">Partner</label>
+        ${comboboxHTML({
+          id: 'pt-f-partner',
+          value: data?.partner || '',
+          placeholder: 'Search or type a new one',
+          // Partners you have actually transferred to first, then the rest of
+          // the card's list. The old select carried an "Other" option purely
+          // because it could not hold a name it had not been given; a field
+          // that takes any name has no use for it.
+          options: [...new Set([
+            ...usedBefore(r => r.partner, redemptions),
+            ...REDEMPTION_PARTNERS,
+          ])],
+        })}
       </div>
     </div>
     <div class="form-group">
@@ -705,7 +723,32 @@ function openForm(data, type) {
   document.getElementById('pt-form-submit').addEventListener('click', submitForm);
 }
 
+/**
+ * What you have put in this field before, most-used first.
+ *
+ * Frequency rather than alphabetical: this is a field you fill in daily, and
+ * the answer is usually one of the three you gave last week. Alphabetical puts
+ * Zomato last on a list you scroll.
+ */
+function usedBefore(pick, rows = transactions) {
+  const counts = new Map();
+  for (const transaction of rows) {
+    const value = String(pick(transaction) ?? '').trim();
+    if (!value) continue;
+    counts.set(value, (counts.get(value) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([value]) => value);
+}
+
 function attachTxPreview() {
+  // Both the first render and a tab switch land here, which is what makes this
+  // the right place to wire the comboboxes: the tab switch replaces the form's
+  // markup wholesale, so the old listeners go with it.
+  wireCombobox('pt-f-merchant');
+  wireCombobox('pt-f-desc');
+
   const updatePreview = () => {
     const amount = parseNum(document.getElementById('pt-f-amount')?.value);
     const multiplier = parseNum(document.getElementById('pt-f-multiplier')?.value);
@@ -719,6 +762,8 @@ function attachTxPreview() {
 }
 
 function attachRdPreview() {
+  wireCombobox('pt-f-partner');
+
   const updateVPP = () => {
     const pts = parseNum(document.getElementById('pt-f-pts-rd')?.value);
     const val = parseNum(document.getElementById('pt-f-val')?.value);
@@ -760,7 +805,7 @@ async function submitForm() {
   } else {
     const payload = {
       date:            document.getElementById('pt-f-date')?.value,
-      partner:         document.getElementById('pt-f-partner')?.value,
+      partner:         document.getElementById('pt-f-partner')?.value.trim(),
       description:     document.getElementById('pt-f-desc')?.value.trim() || null,
       points_redeemed: parseNum(document.getElementById('pt-f-pts-rd')?.value),
       value_amount:    parseNum(document.getElementById('pt-f-val')?.value),
@@ -768,8 +813,10 @@ async function submitForm() {
       user_id:         await getCurrentUserId(),
     };
 
-    if (!payload.date || !payload.points_redeemed) {
-      showToast('Please fill in Date and Points Redeemed.', 'error');
+    // The partner used to be a dropdown, which always had a value. A field you
+    // can type into can also be left empty.
+    if (!payload.date || !payload.partner || !payload.points_redeemed) {
+      showToast('Please fill in Date, Partner and Points Redeemed.', 'error');
       btn.disabled = false; btn.textContent = 'Add redemption'; return;
     }
     if (editingId) payload.id = editingId;

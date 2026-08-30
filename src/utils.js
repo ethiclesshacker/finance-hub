@@ -314,6 +314,147 @@ export async function fetchEURtoINR(fallback = 110.0) {
 }
 
 // ======================================================
+// Combobox — type it, or pick one you have used before.
+//
+// A select cannot hold a value it was not given, so a field that needs both
+// ends up as two controls: a dropdown, and a text box beside it for everything
+// the dropdown does not know. That is two decisions ("which of these?" and
+// "is my answer in there?") for one piece of information.
+//
+// This is one control. It is a text input — so anything can be typed, and the
+// value is read with `.value` exactly as before — with the answers you have
+// already given offered underneath it, filtered as you type.
+// ======================================================
+
+/**
+ * The markup. `options` is a list of strings, in the order they should be
+ * offered — most-used first beats alphabetical for a field you fill in daily.
+ */
+export function comboboxHTML({ id, value = '', placeholder = '', options = [] }) {
+  return `
+    <div class="cb" data-cb="${escapeHTML(id)}">
+      <input type="text" class="form-input cb-input" id="${escapeHTML(id)}"
+             value="${escapeHTML(value)}" placeholder="${escapeHTML(placeholder)}"
+             autocomplete="off" role="combobox" aria-expanded="false"
+             aria-controls="${escapeHTML(id)}-list" aria-autocomplete="list" />
+      <button type="button" class="cb-toggle" tabindex="-1" aria-label="Show what you have used before">
+        <i class="fas fa-chevron-down" aria-hidden="true"></i>
+      </button>
+      <ul class="cb-list" id="${escapeHTML(id)}-list" role="listbox" hidden
+          data-options="${escapeHTML(JSON.stringify(options))}"></ul>
+    </div>`;
+}
+
+/**
+ * Wire one up. Safe to call on markup that is already wired — it is idempotent,
+ * which matters because the points modal re-renders its body on a tab switch.
+ */
+export function wireCombobox(id) {
+  const input = document.getElementById(id);
+  const list = document.getElementById(`${id}-list`);
+  if (!input || !list || input.dataset.cbWired) return;
+  input.dataset.cbWired = '1';
+
+  const wrap = input.closest('.cb');
+  let options = [];
+  try { options = JSON.parse(list.dataset.options || '[]'); } catch { options = []; }
+  let active = -1;
+
+  const close = () => {
+    list.hidden = true;
+    input.setAttribute('aria-expanded', 'false');
+    input.removeAttribute('aria-activedescendant');
+    active = -1;
+  };
+
+  /**
+   * `whole` is for opening the list rather than typing into it: arriving at a
+   * field that already holds an answer and wanting a different one is as
+   * common as filling an empty one, so focusing shows everything.
+   *
+   * It is deliberately not applied while typing. "am" is a prefix of Amazon
+   * and also, in this ledger, a merchant of its own — so treating an exact
+   * match as "show everything" made typing `am` list all fifty merchants.
+   */
+  const paint = ({ whole = false } = {}) => {
+    const needle = input.value.trim().toLowerCase();
+    const exact = whole && options.some(o => o.toLowerCase() === needle);
+    const matches = (!needle || exact) ? options : options.filter(o => o.toLowerCase().includes(needle));
+
+    if (!matches.length) { close(); return; }
+
+    list.innerHTML = matches.slice(0, 50).map((option, index) => {
+      const current = option.toLowerCase() === needle;
+      return `
+      <li class="cb-option ${index === active ? 'is-active' : ''} ${current ? 'is-selected' : ''}"
+          role="option" id="${escapeHTML(id)}-opt-${index}" aria-selected="${current}"
+          data-value="${escapeHTML(option)}">${escapeHTML(option)}</li>`;
+    }).join('');
+    list.hidden = false;
+    input.setAttribute('aria-expanded', 'true');
+
+    // Opening a filled field shows the whole list, which can be fifty long —
+    // so put the answer it currently holds where the eye already is.
+    list.querySelector('.cb-option.is-selected')?.scrollIntoView({ block: 'nearest' });
+
+    // Up, when there is no room below. The modal body scrolls, so a panel that
+    // simply hung downwards would be cut off by it rather than overflowing.
+    const room = window.innerHeight - input.getBoundingClientRect().bottom;
+    wrap.classList.toggle('is-above', room < 220);
+  };
+
+  const commit = (value) => {
+    input.value = value;
+    // The points preview recalculates on input, so a pick has to look like
+    // typing — otherwise choosing a merchant leaves the preview stale.
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    // Closed *after* the event, not before: that handler repaints, and a value
+    // that exactly matches an option opens the full list again. Picking one
+    // would leave the list standing open over the next field.
+    close();
+  };
+
+  input.addEventListener('input', () => { active = -1; paint(); });
+  input.addEventListener('focus', () => paint({ whole: true }));
+
+  wrap.querySelector('.cb-toggle').addEventListener('mousedown', e => {
+    e.preventDefault();                       // keep focus in the input
+    if (list.hidden) { input.focus(); paint({ whole: true }); } else close();
+  });
+
+  input.addEventListener('keydown', e => {
+    const items = [...list.querySelectorAll('.cb-option')];
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (list.hidden) { paint({ whole: true }); return; }
+      active = e.key === 'ArrowDown'
+        ? Math.min(active + 1, items.length - 1)
+        : Math.max(active - 1, 0);
+      items.forEach((el, i) => el.classList.toggle('is-active', i === active));
+      items[active]?.scrollIntoView({ block: 'nearest' });
+      input.setAttribute('aria-activedescendant', items[active]?.id || '');
+    } else if (e.key === 'Enter' && !list.hidden && active >= 0) {
+      e.preventDefault();
+      commit(items[active].dataset.value);
+    } else if (e.key === 'Escape' && !list.hidden) {
+      e.preventDefault();                     // close the list, not the modal
+      close();
+    }
+  });
+
+  // mousedown, not click: the input's blur fires first and would hide the
+  // option before the click landed on it.
+  list.addEventListener('mousedown', e => {
+    const option = e.target.closest('.cb-option');
+    if (!option) return;
+    e.preventDefault();
+    commit(option.dataset.value);
+  });
+
+  input.addEventListener('blur', () => setTimeout(close, 120));
+}
+
+// ======================================================
 // Net worth computations
 //
 // Moved to ./networth-math.js — pure and import-free, so the maths runs

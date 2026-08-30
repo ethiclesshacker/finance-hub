@@ -13,7 +13,7 @@
 // ======================================================
 
 import * as api from '../ledger/api.js';
-import { EVENT_TYPES, STATUSES, SOURCE_TYPES, typeMeta, statusMeta, sourceMeta } from '../ledger/taxonomy.js';
+import { EVENT_TYPES, STATUSES, SOURCE_TYPES, SUBTYPES, typeMeta, statusMeta, sourceMeta } from '../ledger/taxonomy.js';
 import { parseQuickEntry } from '../ledger/nlparse.js';
 import { summariseItems } from '../ledger/items.js';
 import { localDateISO } from '../ledger/normalize.js';
@@ -21,6 +21,7 @@ import { isInflow } from '../ledger/summary.js';
 import * as settings from '../settings.js';
 import {
   escapeHTML, formatINRFull, openModal, closeModal, showToast, todayISO, downloadCSV,
+  comboboxHTML, wireCombobox,
 } from '../utils.js';
 
 let events = [];
@@ -886,6 +887,19 @@ function openQuickAdd() {
   });
 }
 
+/**
+ * The subtypes worth offering for a type: the ones this ledger already holds,
+ * then the catalogue's.
+ *
+ * Subtype is open text — a connector may invent one and the database stores it
+ * — which is exactly why a plain box was the wrong control. Every typo made a
+ * second subtype that filters and totals would never bring back together.
+ */
+function knownSubtypes(type) {
+  const seen = events.filter(e => e.type === type && e.subtype).map(e => e.subtype);
+  return [...new Set([...seen, ...(SUBTYPES[type] || [])])];
+}
+
 function toLocalInput(iso) {
   const date = new Date(iso);
   const pad = n => String(n).padStart(2, '0');
@@ -926,7 +940,12 @@ function openEdit(event) {
         </div>
         <div class="form-group">
           <label class="form-label" for="lg-e-subtype">Subtype</label>
-          <input type="text" class="form-input" id="lg-e-subtype" value="${escapeHTML(event.subtype || '')}" placeholder="optional" />
+          ${comboboxHTML({
+            id: 'lg-e-subtype',
+            value: event.subtype || '',
+            placeholder: 'optional',
+            options: knownSubtypes(event.type),
+          })}
         </div>
       </div>
       <div class="form-group">
@@ -955,6 +974,8 @@ function openEdit(event) {
       <button class="btn-submit" id="lg-edit-save">Save changes</button>
     </div>
   `);
+
+  wireCombobox('lg-e-subtype');
 
   document.getElementById('lg-edit-close').addEventListener('click', closeModal);
   document.getElementById('lg-edit-cancel').addEventListener('click', () => openDetail(event.id));

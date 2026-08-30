@@ -2923,6 +2923,65 @@ input, select, textarea {
   .lg-history-row { grid-template-columns: 1fr; }
 }
 
+/* ---------- Combobox ----------
+   One control for "pick one you have used" and "type a new one". The list is
+   absolutely positioned and flips above the field when the modal body has no
+   room below it — that body scrolls, so a panel hanging downwards is clipped
+   rather than overflowing.
+   ---------------------------------------------------------------- */
+.cb { position: relative; }
+
+.cb-input { padding-right: 2.25rem; }
+
+.cb-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: 2.25rem;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.cb-toggle:hover { color: var(--accent); }
+
+.cb-list {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  right: 0;
+  max-height: 11rem;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0.25rem;
+  list-style: none;
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+.cb.is-above .cb-list { top: auto; bottom: calc(100% + 0.25rem); }
+
+.cb-option {
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cb-option:hover,
+.cb-option.is-active { background: var(--bg-hover); color: var(--text-primary); }
+.cb-option.is-selected { color: var(--accent); }
+
 /* ---------- Food ----------
    The Life timeline says what happened; this screen says what was on the
    plate. It reuses the timeline's day sections and rows so the two read as one

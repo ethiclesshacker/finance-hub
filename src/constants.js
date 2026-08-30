@@ -24,5 +24,7 @@ export const REDEMPTION_PARTNERS = [
   'United Miles', 'Singapore KrisFlyer', 'Air India',
   'British Airways Avios', 'Cathay Asia Miles', 'Emirates Skywards',
   'Marriott Bonvoy', 'IHG One Rewards', 'Hilton Honors',
-  'Club Vistara', 'Etihad Guest', 'Accor ALL', 'Other'
+  // No "Other": the partner field takes any name you type, and an event
+  // recorded against "Other" is a redemption whose partner you cannot look up.
+  'Club Vistara', 'Etihad Guest', 'Accor ALL',
 ];

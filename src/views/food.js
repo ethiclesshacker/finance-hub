@@ -19,7 +19,10 @@ import { summariseItems } from '../ledger/items.js';
 import { localDateISO, entityRef } from '../ledger/normalize.js';
 import { isInflow } from '../ledger/summary.js';
 import * as settings from '../settings.js';
-import { escapeHTML, formatINRFull, downloadCSV, openModal, closeModal, showToast } from '../utils.js';
+import {
+  escapeHTML, formatINRFull, downloadCSV, openModal, closeModal, showToast,
+  comboboxHTML, wireCombobox,
+} from '../utils.js';
 import { openEventDetail } from './ledger.js';
 
 let events = [];            // every food event, all time — the period is a filter
@@ -401,11 +404,11 @@ function openBasket(event) {
           </div>
           <div class="form-group">
             <label class="form-label" for="fb-where">Where</label>
-            <input type="text" class="form-input" id="fb-where" list="fb-places" autocomplete="off"
-                   placeholder="Leave blank if it was at home" />
-            <datalist id="fb-places">
-              ${placeCatalogue().map(place => `<option value="${escapeHTML(place)}"></option>`).join('')}
-            </datalist>
+            ${comboboxHTML({
+              id: 'fb-where',
+              placeholder: 'Leave blank if it was at home',
+              options: placeCatalogue(),
+            })}
           </div>
         </div>`
       : `
@@ -456,6 +459,7 @@ function openBasket(event) {
   `);
 
   const $ = id => document.getElementById(id);
+  if (isNew) wireCombobox('fb-where');
   const panel = $('fb-panel');
   const toggle = $('fb-toggle');
 
