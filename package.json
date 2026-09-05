@@ -14,6 +14,7 @@
     "ledger:ingest": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js ingest",
     "ledger:summarize": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js summarize",
     "ledger:tool": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js tool",
+    "ledger:mcp": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/mcp.js",
     "ledger:users": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js users",
     "ledger:nutrition": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js nutrition",
     "ledger:costs": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js costs"

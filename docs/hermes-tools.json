@@ -42,7 +42,8 @@
             "description": "Restrict to events linked to this merchant/person/place."
           },
           "date_range": {
-            "description": "ISO dates, {from,to}, or a phrase like \"last 30 days\" / \"this month\"."
+            "type": "string",
+            "description": "today, yesterday, this week, last week, this month, last month, this year, \"last N days\", a single YYYY-MM-DD, or an explicit span \"YYYY-MM-DD..YYYY-MM-DD\"."
           },
           "min_confidence": {
             "type": "number"
@@ -263,7 +264,8 @@
             "type": "string"
           },
           "date_range": {
-            "description": "Used when event_id is absent. Defaults to today."
+            "type": "string",
+            "description": "Used when event_id is absent. Defaults to today. today, yesterday, this week, last week, this month, last month, this year, \"last N days\", a single YYYY-MM-DD, or an explicit span \"YYYY-MM-DD..YYYY-MM-DD\"."
           },
           "items": {
             "type": "array",
@@ -334,7 +336,8 @@
         "type": "object",
         "properties": {
           "date_range": {
-            "description": "Phrase or {from,to}. Defaults to today."
+            "type": "string",
+            "description": "Defaults to today. today, yesterday, this week, last week, this month, last month, this year, \"last N days\", a single YYYY-MM-DD, or an explicit span \"YYYY-MM-DD..YYYY-MM-DD\"."
           },
           "by": {
             "type": "string",
@@ -584,7 +587,10 @@
           "entity_id": {
             "type": "string"
           },
-          "date_range": {},
+          "date_range": {
+            "type": "string",
+            "description": "today, yesterday, this week, last week, this month, last month, this year, \"last N days\", a single YYYY-MM-DD, or an explicit span \"YYYY-MM-DD..YYYY-MM-DD\"."
+          },
           "limit": {
             "type": "integer",
             "default": 100
@@ -623,7 +629,10 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "date_range": {}
+          "date_range": {
+            "type": "string",
+            "description": "today, yesterday, this week, last week, this month, last month, this year, \"last N days\", a single YYYY-MM-DD, or an explicit span \"YYYY-MM-DD..YYYY-MM-DD\"."
+          }
         }
       }
     }
@@ -674,7 +683,10 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "date_range": {}
+          "date_range": {
+            "type": "string",
+            "description": "today, yesterday, this week, last week, this month, last month, this year, \"last N days\", a single YYYY-MM-DD, or an explicit span \"YYYY-MM-DD..YYYY-MM-DD\"."
+          }
         }
       }
     }

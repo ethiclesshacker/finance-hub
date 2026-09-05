@@ -549,6 +549,22 @@ explicit `p_user_id` and check `ledger_can_act_as()` rather than trusting it.
 
 ### Hermes
 
+Hermes reaches the ledger as an MCP server, so every tool below is a native
+tool in its list, with its schema — not a skill it has to notice, load and
+turn into a shell command. That distinction is the difference between
+"Weighed 87.4" being written and being "Noted".
+
+```bash
+npm run -s ledger:mcp                         # the MCP server, stdio, one JSON-RPC message per line
+```
+
+Registered in `~/.hermes/config.yaml` under `mcp_servers.ledger`; the tools
+appear as `mcp__ledger__log_meal` and so on. `ledger/mcp.js` is a thin
+adapter over `TOOLS` in `ledger/tools.js`: write tools return a receipt (the
+event minus its sources and audit trail), read tools return the data as is.
+
+The CLI form still exists for a person at a terminal:
+
 ```bash
 node ledger/cli.js tool                       # list the tools
 node ledger/cli.js tool search_events '{"query":"amazon","date_range":"last 30 days"}'

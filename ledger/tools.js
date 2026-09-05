@@ -48,6 +48,13 @@ export function resolveRange(range, timeZone = config.timeZone) {
 
   const phrase = String(range).trim().toLowerCase();
   const today = localDateISO(new Date(), timeZone);
+
+  // "2026-08-01..2026-08-31" — one string, so a model with a single-typed
+  // schema can still ask for an explicit span.
+  const span = phrase.match(/^(\S+)\s*(?:\.\.|\s+to\s+)\s*(\S+)$/);
+  if (span) {
+    return { from: toInstant(span[1], timeZone, false), to: toInstant(span[2], timeZone, true) };
+  }
   const day = (iso, offset) => shiftDate(iso, offset);
 
   const named = {
@@ -112,6 +119,12 @@ function lastMonth(today) {
 
 // ── The tools ──────────────────────────────────────────
 
+const DATE_RANGE = {
+  type: 'string',
+  description: 'today, yesterday, this week, last week, this month, last month, this year, "last N days", '
+    + 'a single YYYY-MM-DD, or an explicit span "YYYY-MM-DD..YYYY-MM-DD".',
+};
+
 export const TOOLS = {
   search_events: {
     description: 'Search the event ledger by text, type, entity, status and date range. The primary way to answer questions about what happened.',
@@ -124,7 +137,7 @@ export const TOOLS = {
         statuses: { type: 'array', items: { type: 'string' }, description: 'Omit to exclude dismissed events.' },
         source_types: { type: 'array', items: { type: 'string' } },
         entity_name: { type: 'string', description: 'Restrict to events linked to this merchant/person/place.' },
-        date_range: { description: 'ISO dates, {from,to}, or a phrase like "last 30 days" / "this month".' },
+        date_range: DATE_RANGE,
         min_confidence: { type: 'number' },
         limit: { type: 'integer', default: 50 },
         offset: { type: 'integer', default: 0 },
@@ -375,7 +388,7 @@ export const TOOLS = {
       type: 'object', required: ['items'],
       properties: {
         event_id: { type: 'string' },
-        date_range: { description: 'Used when event_id is absent. Defaults to today.' },
+        date_range: { ...DATE_RANGE, description: 'Used when event_id is absent. Defaults to today. ' + DATE_RANGE.description },
         items: {
           type: 'array',
           items: {
@@ -503,7 +516,7 @@ export const TOOLS = {
     parameters: {
       type: 'object',
       properties: {
-        date_range: { description: 'Phrase or {from,to}. Defaults to today.' },
+        date_range: { ...DATE_RANGE, description: 'Defaults to today. ' + DATE_RANGE.description },
         by: { type: 'string', enum: ['total', 'day', 'week', 'month'], description: 'Break the period down. Default total.' },
       },
     },
@@ -824,7 +837,7 @@ export const TOOLS = {
     description: 'Every event linked to an entity. "What have I bought from Amazon", "when was I last in Hyderabad", "meetings with this person".',
     parameters: {
       type: 'object', required: ['entity_id'],
-      properties: { entity_id: { type: 'string' }, date_range: {}, limit: { type: 'integer', default: 100 } },
+      properties: { entity_id: { type: 'string' }, date_range: DATE_RANGE, limit: { type: 'integer', default: 100 } },
     },
     handler: async (args) => {
       const { from, to } = resolveRange(args.date_range);
@@ -850,7 +863,7 @@ export const TOOLS = {
 
   get_stats: {
     description: 'Aggregates over a period: counts by type, spend by category, top entities, how much needs review. Computed from events at call time, never stored.',
-    parameters: { type: 'object', properties: { date_range: {} } },
+    parameters: { type: 'object', properties: { date_range: DATE_RANGE } },
     handler: async (args) => {
       const { from, to } = resolveRange(args.date_range);
       return rpc('ledger_stats', { p_from: from, p_to: to, p_user_id: await resolveUserId() });
@@ -876,7 +889,7 @@ export const TOOLS = {
 
   export_ledger: {
     description: 'Everything, as JSON: events with their sources, entities and summaries. The data is yours and portable.',
-    parameters: { type: 'object', properties: { date_range: {} } },
+    parameters: { type: 'object', properties: { date_range: DATE_RANGE } },
     handler: async (args) => {
       const { from, to } = resolveRange(args.date_range);
       return rpc('ledger_export', { p_from: from, p_to: to, p_user_id: await resolveUserId() });
