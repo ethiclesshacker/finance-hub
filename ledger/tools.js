@@ -24,6 +24,8 @@ import { db, resolveUserId } from './db.js';
 import { parseQuickEntry, parseMealEntry } from '../src/ledger/nlparse.js';
 import { dishName, summariseItems } from '../src/ledger/items.js';
 import { localDateISO, normalizeName, entityRef } from '../src/ledger/normalize.js';
+import { findReference } from './nutrition/reference.js';
+import { resolvePending } from './nutrition/resolve.js';
 
 async function rpc(fn, args) {
   const { data, error } = await db().rpc(fn, args);
@@ -372,8 +374,12 @@ export const TOOLS = {
       }
 
 
+      const eventId = result?.event?.id ?? result?.id;
+      const nutrition = eventId ? await priceMeal(userId, eventId, occurredAt, items.map(i => i.name)) : null;
+
       return { ...result,
                understood: { place, items, occurred_at: occurredAt, status: args.status ?? parsed?.parsed.status ?? 'confirmed' },
+               ...(nutrition ? { nutrition } : {}),
                ...(remembered.length ? { remembered_calories_for: remembered } : {}) };
     },
   },
@@ -421,7 +427,9 @@ export const TOOLS = {
       const updated = await rpc('ledger_update_event', {
         p_event_id: event.id, p_changes: changes, p_replace_data: false,
       });
-      return { event_id: event.id, items: merged, status: updated?.status ?? changes.status ?? event.status };
+      const nutrition = await priceMeal(userId, event.id, event.occurred_at, merged.map(i => i.name));
+      return { event_id: event.id, items: merged, status: updated?.status ?? changes.status ?? event.status,
+               ...(nutrition ? { nutrition } : {}) };
     },
   },
 
@@ -951,7 +959,70 @@ async function snapDishes(items, userId) {
     known = new Map();
   }
 
-  return list.map(item => ({ ...item, name: known.get(item.name.toLowerCase().replace(/\s+/g, ' ').trim()) || item.name }));
+  // Two catalogues, in order. Past meals give the exact spelling the person
+  // has used before. The dictionary gives the spelling a *priced* row has,
+  // through the same trigram-plus-token rule the resolver uses, so "Cheese
+  // Slice" joins "Cheese Slices" and inherits its 70 kcal instead of starting
+  // a second, unpriced dish. A miss on both is a genuinely new dish.
+  const out = [];
+  for (const item of list) {
+    const key = item.name.toLowerCase().replace(/\s+/g, ' ').trim();
+    let name = known.get(key);
+    if (!name) {
+      try {
+        const match = await findReference(userId, item.name, {});
+        if (match?.row?.display_name) name = match.row.display_name;
+      } catch {
+        // Same stance as above: an unreachable dictionary is not a reason to
+        // refuse the meal.
+      }
+    }
+    out.push({ ...item, name: name || item.name });
+  }
+  return out;
+}
+
+/**
+ * Price the dishes that are new to the dictionary, right now, and read the
+ * meal back with its calories.
+ *
+ * Without this a dish Hermes logs sits unpriced until someone remembers to run
+ * `npm run ledger:nutrition` — which nobody does at dinner. The resolver is
+ * asked only about the names just written, with a one-call budget, so the
+ * cost is bounded and the receipt can say "~640 kcal" in the same breath as
+ * "logged". Every step is best-effort: the meal is already saved.
+ */
+async function priceMeal(userId, eventId, occurredAt, names) {
+  const wanted = (names || []).filter(Boolean);
+  try {
+    if (wanted.length) {
+      await resolvePending({ userId, names: wanted, maxLlmCalls: 1, log: () => {} });
+    }
+  } catch {
+    // Pricing failed; the rollup will say "unpriced" and the nightly run retries.
+  }
+  try {
+    const at = new Date(occurredAt).getTime();
+    if (!Number.isFinite(at)) return null;
+    const rows = await rpc('food_event_nutrition', {
+      p_from: new Date(at - 60_000).toISOString(),
+      p_to: new Date(at + 60_000).toISOString(),
+      p_limit: 20, p_user_id: userId,
+    }) || [];
+    const row = rows.find(r => (r.event_id ?? r.id) === eventId) || (rows.length === 1 ? rows[0] : null);
+    if (!row) return null;
+    const total = Number(row.items_total ?? 0), resolved = Number(row.items_resolved ?? 0);
+    return stripUndefined({
+      kcal: row.kcal === null || row.kcal === undefined ? null : Math.round(Number(row.kcal)),
+      protein_g: row.protein_g === null || row.protein_g === undefined ? undefined : Math.round(Number(row.protein_g)),
+      // "full" means every dish is priced; "partial" means the total is a
+      // floor; "none" means say "logged, calories pending" rather than a number.
+      basis: row.basis ?? undefined,
+      dishes_priced: total ? `${resolved}/${total}` : undefined,
+    });
+  } catch {
+    return null;
+  }
 }
 
 /** The food event nearest to now inside a range — "the dinner I mentioned". */

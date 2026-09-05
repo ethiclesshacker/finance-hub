@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Price the dishes the day brought in: 09:20 and 23:45.
+
+  A meal Hermes logs is priced on the spot (log_meal asks the resolver about
+  its own dishes before it answers). A meal that arrived by email is not: the
+  ingester records what was ordered and moves on. This job is the safety net
+  for those, and for any dish the inline pricing could not settle. It is a
+  no-op when nothing is pending, which is most runs.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.aadityavs.ledger.nutrition</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>cd /Users/aadityavs/projects/finance-hub &amp;&amp; npm run ledger:nutrition</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>20</integer></dict>
+    <dict><key>Hour</key><integer>23</integer><key>Minute</key><integer>45</integer></dict>
+  </array>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/ledger-nutrition.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/ledger-nutrition.err</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

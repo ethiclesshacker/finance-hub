@@ -1027,3 +1027,11 @@ test('money coming back is never a meal, whoever sent it', () => {
   assert.equal(event.type, 'transfer');
   assert.equal(event.subtype, 'refund');
 });
+
+test('a number with a unit after it is a quantity, not rupees', () => {
+  const tz = 'Asia/Kolkata';
+  assert.equal(parseMealEntry('2 Maggi atta noodles with 2 cheese slices and a Coke Zero 250 mL for dinner', { timeZone: tz })?.parsed.amount ?? null, null);
+  assert.equal(parseMealEntry('coke zero 250ml', { timeZone: tz })?.parsed.amount ?? null, null);
+  assert.equal(parseMealEntry('had 100 g cashews', { timeZone: tz })?.parsed.amount ?? null, null);
+  assert.equal(parseMealEntry('dinner at Nagarjuna 1250', { timeZone: tz })?.parsed.amount, 1250);
+});

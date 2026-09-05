@@ -573,6 +573,19 @@ node ledger/cli.js tool log_meal      '{"natural_language":"2 packets maggi with
 node ledger/cli.js tool get_stats     '{"date_range":"this month"}'
 ```
 
+#### A logged meal is priced as it is logged
+
+`log_meal` and `add_meal_items` do three things the CLI never used to: snap each
+dish name to the dictionary's spelling through the same trigram-plus-token rule
+the resolver uses (so "Cheese Slice" joins "Cheese Slices" and inherits its
+calories), ask the resolver — with a one-call budget — about any dish that is
+still new, and read the meal back. The receipt carries a `nutrition` block:
+`kcal`, `protein_g`, `basis` and `dishes_priced`, so the assistant can answer
+"logged, ~510 kcal" in one breath. When `basis` is `none` the honest answer is
+"logged, calories pending". The `dev.aadityavs.ledger.nutrition` launchd job
+(09:20 and 23:45) prices what email brought in and anything inline pricing
+could not settle.
+
 #### Meals get their own pair of tools
 
 `create_event` records that a meal happened. The Food screen is built on

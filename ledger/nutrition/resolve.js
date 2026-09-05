@@ -70,13 +70,20 @@ export async function resolvePending({
   useReferences = true,
   useDatabases = true,
   useLlm = true,
+  // Only these dish names (case-insensitive); everything else pending is left
+  // for the scheduled run. Used by log_meal to price a meal as it is logged.
+  names = null,
   verbose = false,
   batchSize = config.limits.llmBatchSize * 6,
   maxLlmCalls = config.limits.maxLlmCalls,
   log = console.log,
 } = {}) {
   const uid = userId || await resolveUserId();
-  const pending = await pendingItems(uid, limit);
+  let pending = await pendingItems(uid, limit);
+  if (Array.isArray(names)) {
+    const wanted = new Set(names.map((n) => String(n).toLowerCase().replace(/\s+/g, ' ').trim()));
+    pending = pending.filter((p) => wanted.has(String(p.display_name).toLowerCase().replace(/\s+/g, ' ').trim()));
+  }
 
   const counters = {
     pending: pending.length,

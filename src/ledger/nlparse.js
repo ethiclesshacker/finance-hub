@@ -62,7 +62,10 @@ const DAYPARTS = [
 // Quick-add is typed by a person who knows what the number means, so a bare
 // trailing number is money — the one place in the pipeline where that guess is
 // safe. Units and clock times are excluded, and the assumption is recorded.
-const BARE_AMOUNT_RE = /(?:^|[\s,(])(\d{2,7}(?:\.\d{1,2})?)(?!\s*(?:k\b|km|kg|mins?|hrs?|am|pm|%|:|\/|-|st|nd|rd|th))\b/gi;
+// A bare number is rupees — unless a unit follows it. "Coke Zero 250 mL" is a
+// can, not a ₹250 dinner, and "2 pieces" is a count. The lookahead lists the
+// units that turn up in what people eat and drink.
+const BARE_AMOUNT_RE = /(?:^|[\s,(])(\d{2,7}(?:\.\d{1,2})?)(?!\s*(?:k\b|km|kg|kgs|mins?|hrs?|am|pm|%|:|\/|-|st|nd|rd|th|ml|mls|l\b|ltr|litres?|liters?|g\b|gm|gms|grams?|mg|kcal|cal\b|cals|pcs?\b|pieces?|slices?|packets?|packs?|cups?|glass|glasses|bowls?|plates?|nos?\b|x\b))\b/gi;
 
 function bareAmount(text) {
   let last = null, m;
