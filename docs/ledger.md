@@ -184,6 +184,203 @@ Deriving rather than storing is what makes the boundaries movable: change one
 here (`MEAL_SLOTS` in `src/ledger/taxonomy.js`) and every meal in the ledger's
 history relabels itself, with nothing re-ingested and no row rewritten.
 
+### Nutrition
+
+The ledger records what was ordered and what it cost. It has never recorded
+what was in it. `0005_nutrition.sql` adds that as a **dish dictionary**, and
+the shape follows from one measurement: a year of eating produced 654 food
+events but only **146 distinct dish names**. Nutrition is a property of "Cheese
+Masala Dosa", not of the twenty-four separate evenings you ordered one.
+
+So `food_items` holds one row per dish, keyed by the same
+`ledger_normalize_name()` that dedupes merchants, and every event that mentions
+that dish reads the same row. Resolve once, reuse forever; re-running the
+resolver costs nothing.
+
+#### The resolver ladder
+
+`npm run ledger:nutrition` walks four rungs, cheapest first:
+
+| Rung | Source | What it answers | Measured on this ledger |
+| --- | --- | --- | --- |
+| 0 | the dictionary | already resolved | free |
+| 0.5 | the reference engine | the same dish, spelled differently | free |
+| 1 | curated table | the traps only | 10 names |
+| 1.7 | Anuvaad INDB (local) | generic Indian dishes, measured | free, no API |
+| 2 | Open Food Facts / USDA FDC | branded packages | 27 names |
+| 3 | the model | composed dishes, INDB-grounded | 99 names |
+
+**The ordering is deliberately the opposite of the obvious one**, and it is the
+only interesting decision in the feature. Structured food databases look like
+they should be the first pass and are not, because they answer a different
+question than the one being asked: they hold *ingredients and packaged
+products*, while a receipt line is *a composed dish at an unknown portion*.
+Probing the real dish names against both APIs:
+
+| Query | What came back |
+| --- | --- |
+| `Bhindi Roti Thali` | FDC: "Bread, chappatti or roti" — a thali is roti *plus* dal *plus* sabzi *plus* rice |
+| `Paneer Grilled Sandwich` | FDC: "Fish sandwich, grilled" — wrong food, plausible score |
+| `Cheese Masala Dosa` | both: nothing |
+| `rajma chawal` | OFF: two retort pouches at 73 and 285 kcal/100g, disagreeing 4× |
+| `Onion` | FDC: "ONION" at 289 kcal/100g — an exact string match, and 7× wrong |
+
+That last row is why acceptance is **not** a string-similarity threshold: the
+perfect name match was the worst answer in the probe. `judge()` in
+`ledger/nutrition/databases.js` instead requires three things at once — the
+candidate must name essentially the whole query (coverage, not Jaccard, which
+rewards short names), its energy density must be physically possible for a
+food, and independent rows for the same product must agree. All four rows above
+are rejected; a real `Lay's` label is accepted.
+
+#### The reference engine
+
+Before anything is looked up or estimated, `food_match_item()` asks whether the
+dictionary already knows this dish under a different spelling — `Idli (2pc)` and
+`Idly (2pc)`, `Onion Uttapam` and `Onion Uthappam`. Re-estimating those is worse
+than wasteful: two rows for one plate will disagree by a hundred calories, and
+the disagreement then shows up as noise in a daily total with no real cause.
+
+The hard part is knowing when **not** to reuse, and a similarity score cannot
+do it. These four pairs all score high and only the first is safe:
+
+| Pair | Trigram | Same dish? |
+| --- | --- | --- |
+| `Idli (2pc)` / `Idly (2pc)` | 0.83 | yes — transliteration |
+| `Paneer Butter Masala Mini Thali` / `… Thali` | 0.88 | **no** — a size |
+| `Veg Fried Rice` / `Egg Fried Rice` | 0.79 | **no** — different food |
+| `Coke Zero 300ml` / `Coca Cola 300ml` | 0.71 | **no** — 200 kcal apart |
+
+So there are two gates, not one. pg_trgm rules out unrelated dishes cheaply;
+`sameDish()` in `ledger/nutrition/reference.js` then requires that the leftover
+tokens be nothing that could change the plate. A **MODIFIER** — cheese, ghee,
+paneer, egg, a size, a sugar state — present on one side and absent on the other
+disqualifies the match outright, and is checked *before* spelling is paired off,
+so `veg`/`egg` can never be waved through as a typo.
+
+Only then are same-word-different-spelling tokens paired up by edit distance,
+with a budget that scales with length (`idli`/`idly` at 4 letters gets one edit;
+`uttapam`/`uthappam` at 8 gets two; anything under 4 letters gets none). Without
+that pairing step a substitution always contributes *two* tokens to the diff and
+could never read as a single spelling difference.
+
+A reused row **inherits its origin**: `source_ref` records which dish it was
+taken from, the similarity, and the reason, and confidence drops a step. A value
+that began as a model estimate never gets promoted to looking like a checked one
+just by being copied.
+
+The dictionary grows as the resolver runs, so a name the model resolves in an
+early batch is available to match against later in the same run.
+
+#### The Anuvaad INDB rung, and what it grounds
+
+`ledger/nutrition/indb.json` is the **vegetarian subset** of the Anuvaad Indian
+Nutrient Databank (2024.11): 859 standardized recipes with per-100g composition
+*and a real per-serving portion* — the one thing no remote database offered. A
+local file: free to consult, cannot rate-limit.
+
+The vegetarian filter ran at extraction (155 rows dropped): all flesh by
+English and Hindi names (chicken/murgh, mutton/gosht, fish/machli, keema…),
+all egg dishes, and the egg-*defined* preparations — meringue, soufflé,
+classic mayonnaise. Explicitly eggless variants stay, as does all dairy.
+`test/nutrition.test.js` holds the line against regressions.
+
+Used two ways:
+
+- **A judged rung** for generic names INDB truly contains ("Masala dosa" →
+  345 kcal / 210 g, measured). Same gates as the remote rung, with one
+  addition: an *exact* name match skips the candidates-must-agree gate,
+  because INDB's several dosa variants disagreeing is real variety, not
+  ambiguity — it must not veto the row whose name is the query.
+- **Grounding for the model.** Each batch carries the closest INDB rows as
+  measured anchors, so "Cheese Masala Dosa" is estimated as *measured masala
+  dosa + cheese*, with a note that restaurant versions run 10–30% richer.
+
+Rank 38 (`0007_indb_source.sql`): above USDA FDC, below an OFF printed label.
+
+#### The curated table is deliberately tiny
+
+`ledger/nutrition/curated.js` holds ten entries, and growing it would be a
+mistake. It is not "dishes we have estimates for" — it is "cases where a model
+reliably errs and the right answer is not a judgement call": zero-calorie
+drinks whose names contain "Coke", raw produce that every database returns
+dried, and sachet condiments where assuming 100g is the whole error.
+
+Filling it with estimated rows would be worse than useless. `curated` outranks
+`llm` in `food_source_rank()`, so a guess written there would permanently
+shadow a better answer while carrying a provenance implying a human checked it.
+The way to improve a dish you eat often is to correct it with `setManual()`,
+which writes `source = 'manual'`, `verified = true` — an honest record that
+someone actually checked those numbers.
+
+#### Portion is stored, never implied
+
+Every food database on earth returns kcal per 100g. A ledger row is "one mini
+thali". The gram weight bridging those two is **the largest error term in the
+whole estimate**, so `portion_g` is a column you can correct rather than a
+number buried inside a kcal figure you cannot audit. The model is required to
+state it; the database rung records whether it came from the item name, the
+database's serving size, or a bare 100g assumption.
+
+#### Stated calories outrank the dictionary
+
+A calorie count carried on the line item itself (`kcal`) wins over any
+dictionary row: it came from the person or the menu, about that exact serving.
+Zero is a legitimate statement — a Coke Zero — so the test is "is a number",
+never truthiness. Macros still come from the dictionary when it knows the dish.
+
+Stated counts are also written through to `food_items` as `source = 'manual'`
+(unverified), so a dish the user once priced is never estimated again. This
+rule exists because of a real failure: "Maharaja Mac 833, fries 225, Coke Zero
+0" rolled up as **1 kcal** — only the Coke Zero was in the dictionary, and the
+rollup threw the stated numbers away. `0006_stated_calories.sql` carries the
+SQL half.
+
+#### What the rollup refuses to do
+
+`food_event_nutrition()` reports a `basis` per meal, and the honesty is in the
+middle value:
+
+- `itemized` — every line item resolved. The number means something.
+- `partial` — some resolved. Reported *with the shortfall*, because a
+  half-priced basket must never read as a light meal.
+- `none` — no basket, or nothing in it resolved. **`kcal` is null, never 0.** An
+  unknown meal is not a meal without calories, and a zero would quietly drag
+  every average down.
+
+Averages are per *eating day*, not per calendar day: a ledger built from
+receipts knows nothing about the days you cooked, and averaging those in as
+zeroes would invent a diet rather than report one. Any total on the Food screen
+carries its coverage beside it, because the same average over 40% of your meals
+and over 95% of them are different claims.
+
+#### On the Food screen
+
+The Food page shows kcal per eating day and protein in its header, a calorie
+figure on each meal row, and a per-serving chip on each dish card with the
+provenance in its tooltip. Above the list is one chart — calories over time,
+with a Day / Week / Month toggle.
+
+The chart plots **kcal per eating day at every grain**. A week bucket is the
+average of its eating days, never their sum: the grain must change the
+resolution and not the units, or switching to Week silently multiplies the
+y-axis by seven and the line looks like a change in how someone eats. The
+tooltip carries how many eating days a bucket was built from, because a week
+averaged over two days is a much weaker claim than one averaged over seven.
+
+Everything calorie-related is hidden until the dictionary can answer. An empty
+chart claims the data exists and is flat; no chart claims nothing.
+
+Nothing here writes back to `events`. The rollup is computed at read time, so
+correcting one dish row re-values the entire history at once and leaves no
+stale copies — the same reason the meal label is derived rather than stored.
+
+The Food screen mirrors the SQL rollup in `src/ledger/nutrition.js`, the same
+twinning `normalizeName()` has and for the same reason: the screen loads every
+food event once and filters by period in memory, so asking the database to
+re-roll on each range change would trade that away for nothing. **Change one,
+change both.**
+
 ### What the parser learned the hard way
 
 Every rule below exists because real mail broke something. They are worth
@@ -340,6 +537,11 @@ Every caller — browser, jobs, Hermes — goes through the same SQL functions.
 | `ledger_search_entities` / `ledger_get_entity` / `ledger_search_entity_events` | "What have I bought from Amazon?" |
 | `ledger_export(from, to)` | Everything, as JSON. |
 | `ledger_purge_snippets(days)` | Drop cached body text, keep the pointer. |
+| `food_upsert_item(user_id, payload)` | The single write path for a dish. Rank-guarded; never demotes. |
+| `food_match_item(name, threshold)` | The reference engine's candidate list. Judgement stays in JS. |
+| `food_pending_items(limit)` | Dish names with no nutrition, most-eaten first. |
+| `food_event_nutrition(from, to)` | Per-meal rollup with its `basis`. |
+| `food_coverage()` | How much of the ledger the dictionary can answer. |
 
 All are `SECURITY INVOKER`, so RLS enforces ownership for a signed-in caller.
 The jobs use the service role, which bypasses RLS — so those functions take an
@@ -388,6 +590,29 @@ is evidence it happened. Both tools snap dish names to the spellings the ledger
 already holds, so "maggi" joins the Maggi you eat weekly instead of starting a
 second one, and both write with merging off: eating is not buying, and a meal
 with no amount would otherwise fold into the grocery order that paid for it.
+
+Four of these are about food specifically:
+
+| Tool | For |
+| --- | --- |
+| `lookup_barcode` | The user reads out or photographs a barcode. Resolves it against Open Food Facts, remembers the product, and optionally logs it as eaten. |
+| `get_nutrition` | "How many calories did I have today?" Totals for a period, at `total`/`day`/`week`/`month` grain, always with coverage attached. |
+| `set_food_nutrition` | The user reads the panel off a packet, or disputes a number. Writes `manual` + `verified`, which outranks every estimate permanently and applies retroactively. |
+| `list_unresolved_foods` | What has no nutrition yet, most-eaten first — so Hermes can ask about the handful that would improve coverage most. |
+| `log_measurement` | A body reading — weight, waist, body fat. One per metric per day; a same-day repeat is a correction (via `ledger_update_event`, audited), never a duplicate. Bounds-checked so "884" can never become a weight. |
+| `log_activity` | A workout, run, walk or sport. Stated facts (what, how long, how far) land in `data`; an estimated calorie burn, if any, lands in `inference` — the user said what they did, not what it burned. |
+
+**A barcode is a key, not a search.** `lookup_barcode` hits Open Food Facts'
+product endpoint with an exact identifier, so there is no candidate list, no
+similarity score and no `judge()` step — the EAN either identifies a product with
+a printed label or it does not. That is why it is trusted at 0.95 confidence when
+the text-search rung tops out at 0.85. A barcode OFF does not have returns a
+`not_found` with a next step (ask for the label and call `set_food_nutrition`),
+not an error.
+
+`lookup_barcode` defaults to **not** logging the item as eaten. Scanning a packet
+in a shop is not eating it, and a tool that quietly adds 500 kcal to today
+because someone was curious about a label would be worse than no tool.
 
 `docs/hermes-tools.json` is the same set in JSON-Schema function-calling form.
 Date ranges accept ISO dates, `{from,to}`, or phrases like `"last 30 days"`,

@@ -21,7 +21,7 @@ import { isInflow } from '../ledger/summary.js';
 import * as settings from '../settings.js';
 import {
   escapeHTML, formatINRFull, openModal, closeModal, showToast, todayISO, downloadCSV,
-  comboboxHTML, wireCombobox,
+  comboboxHTML, wireCombobox, renderKpiCards,
 } from '../utils.js';
 
 let events = [];
@@ -44,7 +44,6 @@ export async function renderLedger(container) {
         <p>A structured record of what happened — mostly filled in by itself</p>
       </div>
       <div class="lg-header-right">
-        <div class="lg-stats" id="lg-stats"></div>
         <div class="lg-header-actions">
           <span id="lg-ingest-badge" class="badge badge-gray" title="Last ingestion run">
             <i class="fas fa-circle-notch fa-spin" style="font-size:0.6rem"></i> Checking…
@@ -56,9 +55,11 @@ export async function renderLedger(container) {
       </div>
     </div>
 
-    <div class="page-body lg-body">
-      <div class="table-section">
-        <div class="table-toolbar">
+    <div class="page-body lg-body lg-page">
+      <div class="kpi-grid lg-kpis" id="lg-stats"></div>
+
+      <div class="table-section lg-panel">
+        <div class="table-toolbar fd-toolbar">
           <div class="table-tabs">
             <button type="button" class="table-tab active" id="lg-tab-timeline">
               <i class="fas fa-stream" style="margin-right:0.3rem"></i>Timeline
@@ -117,7 +118,7 @@ export async function renderLedger(container) {
             </button>
           </div>
         </div>
-        <div class="table-inner">
+        <div class="lg-scroll">
           <div id="lg-timeline"></div>
         </div>
       </div>
@@ -281,8 +282,8 @@ function renderIngestBadge(runs) {
 }
 
 function renderKPIs(reviewCount) {
-  const strip = document.getElementById('lg-stats');
-  if (!strip) return;
+  const grid = document.getElementById('lg-stats');
+  if (!grid) return;
 
   const zone = timeZone();
   const today = localDateISO(new Date(), zone);
@@ -298,27 +299,36 @@ function renderKPIs(reviewCount) {
   const auto = events.filter(e => e.source_type !== 'manual' && e.source_type !== 'hermes').length;
   const autoPct = events.length ? Math.round((auto / events.length) * 100) : 0;
 
-  // These are reference numbers, not the content. As four cards they cost 292
-  // vertical pixels on a laptop and pushed the timeline — the actual point of
-  // the page — down to three visible rows.
-  const stats = [
-    { label: 'Today', value: todayEvents.length || '—',
-      note: todayEvents.length ? formatINRFull(spendOf(todayEvents)) : 'nothing yet' },
-    { label: '7 days', value: weekEvents.length, note: formatINRFull(spendOf(weekEvents)) },
-    { label: 'Automatic', value: `${autoPct}%`, note: `${auto} of ${events.length}` },
-    { label: 'To review', value: reviewCount, note: reviewCount ? 'needs a look' : 'all clear',
-      action: reviewCount ? 'review' : null },
-  ];
+  // Full cards, not the header chips these used to be. The chips existed
+  // because four cards pushed a *scrolling* timeline down to three visible
+  // rows — but the timeline scrolls inside its own panel now, so the cards no
+  // longer cost it anything. Same trade, opposite answer.
+  renderKpiCards(grid, [
+    { id: 'lg-kpi-today', label: 'Today', icon: 'fa-calendar-day',
+      value: String(todayEvents.length || '—'),
+      sub: todayEvents.length ? formatINRFull(spendOf(todayEvents)) : 'nothing yet',
+      raw: todayEvents.length },
+    { id: 'lg-kpi-week', label: '7 days', icon: 'fa-calendar-week', tone: 'teal',
+      value: String(weekEvents.length), sub: formatINRFull(spendOf(weekEvents)),
+      raw: weekEvents.length },
+    { id: 'lg-kpi-auto', label: 'Automatic', icon: 'fa-wand-magic-sparkles', tone: 'purple',
+      value: `${autoPct}%`, sub: `${auto} of ${events.length} events`,
+      tooltip: 'Events the ledger filled in by itself, from email and card alerts',
+      raw: autoPct },
+    { id: 'lg-kpi-review', label: 'To review', icon: 'fa-circle-question',
+      tone: reviewCount ? 'warning' : 'success',
+      value: String(reviewCount),
+      badge: reviewCount ? undefined : { type: 'ok', text: 'All clear' },
+      sub: reviewCount ? 'needs a look — click to open' : 'nothing waiting',
+      tooltip: reviewCount ? 'Open the review queue' : '',
+      raw: reviewCount },
+  ]);
 
-  strip.innerHTML = stats.map(stat => `
-    <${stat.action ? 'button type="button" class="lg-stat is-action" data-go="review"' : 'div class="lg-stat"'}>
-      <span class="lg-stat-value mono">${escapeHTML(String(stat.value))}</span>
-      <span class="lg-stat-label">${escapeHTML(stat.label)}</span>
-      <span class="lg-stat-note">${escapeHTML(stat.note)}</span>
-    </${stat.action ? 'button' : 'div'}>
-  `).join('');
-
-  strip.querySelector('[data-go="review"]')?.addEventListener('click', () => switchTab('review'));
+  // The review card is a door, not just a number.
+  const reviewCard = document.getElementById('lg-kpi-review');
+  if (reviewCard && reviewCount) {
+    reviewCard.addEventListener('click', () => switchTab('review'));
+  }
 }
 
 // ── Timeline ───────────────────────────────────────────

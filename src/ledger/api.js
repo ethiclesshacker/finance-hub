@@ -84,6 +84,30 @@ export async function dailySummaries(fromDate, toDate) {
   return Object.fromEntries((data || []).map(row => [row.date, row]));
 }
 
+// ── Nutrition ──────────────────────────────────────────
+//
+// The dish dictionary is small (one row per distinct thing eaten, not per meal)
+// and the Food screen needs all of it to roll anything up, so it is read whole
+// and cached by the caller. Direct table access is fine here where it is not
+// elsewhere: nothing is being written, and there is no deduplication path to
+// bypass — the RLS policy is the whole of the access rule.
+
+/** Every resolved dish, for the client-side rollup in src/ledger/nutrition.js. */
+export async function foodDictionary() {
+  const { data, error } = await supabase
+    .from('food_items')
+    .select('normalized_name, display_name, kcal, protein_g, carbs_g, fat_g, portion_g, category, source, confidence, verified')
+    .not('kcal', 'is', null);
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+/** How much of the ledger the dictionary can answer. Shown beside any total. */
+export const foodCoverage = () => rpc('food_coverage', {});
+
+/** Correct one dish by hand. Writes source 'manual', which outranks the resolver. */
+export const setFoodItem = payload => rpc('food_upsert_item', { p_user_id: null, p_payload: payload });
+
 /** The last few ingestion runs — the "is this thing on?" indicator. */
 export async function recentRuns(limit = 5) {
   const { data, error } = await supabase

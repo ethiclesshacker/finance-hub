@@ -111,6 +111,9 @@ Run the migrations in `supabase/migrations/` in order, via the Supabase SQL edit
 - `0002_harden_rls.sql` — `NOT NULL` on `user_id` for the three data tables. A null `user_id` can never satisfy `auth.uid() = user_id`, so such a row is invisible to everyone, owner included.
 - `0003_event_ledger.sql` — the event ledger: tables, indexes, triggers, RLS and grants.
 - `0004_ledger_api.sql` — the ledger's function layer. Ingestion, deduplication, search, summaries and export. The browser, the jobs and Hermes all call these same functions.
+- `0005_nutrition.sql` — the dish dictionary and the calorie rollup. `food_items` holds one row per distinct thing you have eaten, not one per meal, so a year of eating resolves ~150 names rather than ~650 events. Populate it with `npm run ledger:nutrition`.
+- `0006_stated_calories.sql` — replaces the rollup functions: a calorie count stated on a line item (`kcal`) outranks the dictionary.
+- `0007_indb_source.sql` — registers `indb` (Anuvaad Indian Nutrient Databank, vegetarian subset) as a resolver source, ranked above FDC and below a printed label.
 
 `supabase/checks/rls_audit.sql` is a read-only audit: it reports whether RLS is enabled, whether every command is owner-scoped, which commands have no policy, and whether any row has a null `user_id`. Run it after any policy change.
 

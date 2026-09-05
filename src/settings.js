@@ -97,6 +97,20 @@ export const SETTINGS_SCHEMA = {
     label: 'Reward rate target', suffix: '%', hint: 'Value returned as a percentage of spend.',
   },
 
+  // ── Food ──────────────────────────────────────────────
+  //
+  // The target the Food page draws as a line and marks red when crossed. The
+  // default is sized for this user's stated goal (90 → 75 kg): a mostly
+  // sedentary ~90 kg adult burns roughly 2,300–2,500 kcal a day, so 1,800
+  // leaves a 500–700 kcal deficit — about half a kilo a week, the sustainable
+  // end of the range. Not medical advice; a number to eat against, tuned here
+  // as the weight comes down.
+  food_kcal_target: {
+    type: 'number', default: 1800, min: 800, max: 6000, step: 50, group: 'Food',
+    label: 'Daily calorie target', suffix: 'kcal',
+    hint: 'The line on the Food chart. Days above it show red. ~1,800 gives a 90 kg adult a deficit of about half a kilo a week; recheck it every 5 kg lost.',
+  },
+
   // ── Event ledger ──────────────────────────────────────
   //
   // The spec is explicit that confidence thresholds must not be baked into the
@@ -170,6 +184,8 @@ export const SETTING_GROUPS = [
     blurb: 'How much cushion counts as enough, and what counts as cushion.' },
   { name: 'Credit card', icon: 'fa-credit-card',
     blurb: 'HSBC TravelOne: the transfer ratio and the targets the Points screen measures against.' },
+  { name: 'Food', icon: 'fa-utensils',
+    blurb: 'The one number the Food screen measures every day against.' },
   { name: 'Event ledger', icon: 'fa-timeline', advanced: true,
     blurb: 'How email is turned into events: what counts as certain, and when two sources are describing the same thing. The defaults are tuned against a real inbox — change them only if the timeline is getting things wrong.' },
 ];

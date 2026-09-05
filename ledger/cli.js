@@ -9,6 +9,9 @@
 //   node ledger/cli.js users
 //   node ledger/cli.js purge      [--days 90]
 //   node ledger/cli.js reset      --yes   (deletes every event and source)
+//   node ledger/cli.js nutrition  [--dry-run] [--limit N] [--no-llm] [--no-db] [--no-ref] [-v]
+//   node ledger/cli.js nutrition --reanchor   (upgrade model estimates: INDB, then grounded re-estimate)
+//   node ledger/cli.js nutrition --status
 //   node ledger/cli.js costs      [--days 30]
 //   node ledger/cli.js models     [--filter 5.6]
 //
@@ -162,6 +165,66 @@ const COMMANDS = {
       console.log(`${user.id}  ${user.email}`);
     }
     console.log('\nSet LEDGER_USER_ID in .env.ledger to the id you want the jobs to write to.');
+  },
+
+  // ── Nutrition ────────────────────────────────────────
+  //
+  // Fills the dish dictionary, then reports how much of the ledger it can
+  // answer. Safe to re-run: a name already resolved is never re-asked, so the
+  // second run costs nothing and the tenth costs nothing.
+  async nutrition() {
+    const { resolvePending, coverage, pendingItems } = await import('./nutrition/resolve.js');
+    const { resolveUserId } = await import('./db.js');
+    const userId = await resolveUserId();
+
+    const pct = (n, d) => (d ? `${Math.round((n / d) * 100)}%` : '—');
+    const report = async (label) => {
+      const c = await coverage(userId);
+      console.log(`\n${label}`);
+      console.log(`  dictionary       ${c.dictionary_resolved}/${c.dictionary_size} dishes resolved`);
+      console.log(`  line items       ${c.line_items_resolved}/${c.line_items_total} (${pct(c.line_items_resolved, c.line_items_total)})`);
+      console.log(`  events itemized  ${c.events_itemized}  partial ${c.events_partial}  no items ${c.events_no_items}  of ${c.events_total}`);
+      const by = Object.entries(c.by_source || {}).sort((a, b) => b[1] - a[1]);
+      if (by.length) console.log(`  by source        ${by.map(([k, v]) => `${k} ${v}`).join('  ')}`);
+      return c;
+    };
+
+    if (args.reanchor) {
+      const { reanchor } = await import('./nutrition/resolve.js');
+      const c = await reanchor({ userId, dryRun: Boolean(args.dryRun) });
+      console.log(`\nRe-anchored: INDB ${c.indb}, re-estimated ${c.reestimated}, unchanged ${c.unchanged}, failed ${c.failed} of ${c.candidates}`);
+      await report('Coverage now');
+      return;
+    }
+
+    if (args.status) {
+      await report('Nutrition coverage');
+      const pending = await pendingItems(userId, 20);
+      if (pending.length) {
+        console.log(`\n  still unresolved (top ${Math.min(pending.length, 20)} by frequency):`);
+        for (const p of pending) console.log(`    ${String(p.occurrences).padStart(3)}x  ${p.display_name}`);
+      }
+      return;
+    }
+
+    const counters = await resolvePending({
+      userId,
+      limit: args.limit ?? 500,
+      dryRun: Boolean(args.dryRun),
+      useDatabases: args.noDb !== true,
+      useLlm: args.noLlm !== true,
+      useReferences: args.noRef !== true,
+      verbose: Boolean(args.verbose),
+    });
+
+    console.log(`\nResolved: curated ${counters.curated}  referenced ${counters.referenced}  database ${counters.database}  model ${counters.llm}  non-food ${counters.nonFood}`);
+    if (counters.unresolved) console.log(`Unresolved: ${counters.unresolved}`);
+    if (counters.llmCalls) {
+      const { prompt_tokens: p, completion_tokens: c } = counters.usage;
+      console.log(`Model calls: ${counters.llmCalls}  tokens ${p} in / ${c} out  (see \`npm run ledger:costs\` for the bill)`);
+    }
+    if (args.dryRun) { console.log('\nDry run — nothing was written.'); return; }
+    await report('Coverage now');
   },
 
   async purge() {

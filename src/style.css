@@ -159,7 +159,7 @@ html {
 }
 
 body {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: 'Inter Variable', 'Inter', system-ui, -apple-system, sans-serif;
   background-color: var(--bg-dark);
   color: var(--text-primary);
   line-height: 1.6;
@@ -3262,6 +3262,145 @@ input, select, textarea {
 .fd-card-last { flex: none; }
 
 .fd-card-spend { font-size: var(--fs-xs); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+/* Calories.
+   Estimated numbers, and they are styled as such: --text-muted, never the
+   accent, so a figure nobody has verified cannot out-shout the money beside it
+   — which the receipt actually stated. A row a human has checked earns
+   --text-secondary and nothing more; the difference is legible without being a
+   badge. */
+/* ---------- Viewport-locked pages: Food and Life ----------
+   One viewport, no page scroll on desktop. The page is a column — KPI cards,
+   then the working area — and only the list scrolls, inside its panel. Food
+   splits the area with a chart; Life gives it all to the timeline. Below the
+   desktop breakpoint everything stacks and the page scrolls normally, because
+   a viewport lock needs the width. */
+@media (min-width: 981px) {
+  .main-content:has(.fd-page, .lg-page) { height: 100vh; min-height: 0; overflow: hidden; }
+
+  /* The router renders each view into an anonymous div inside main-content.
+     For every other page it can stay a plain block; here it has to carry the
+     height constraint down, or the chain breaks at the one element no view
+     owns and the page quietly scrolls again. */
+  .main-content > div:has(.fd-page, .lg-page) {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .lg-page {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4);
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    padding-bottom: var(--sp-5);
+  }
+  .lg-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; margin: 0; }
+  .lg-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+
+  .fd-page {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4);
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    padding-bottom: var(--sp-5);
+  }
+
+  .fd-layout {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    /* The one line the whole lock hangs on: an implicit `auto` row sizes to
+       its content, so a tall canvas would win and the page would scroll.
+       minmax(0, 1fr) makes the row exactly the leftover height instead. */
+    grid-template-rows: minmax(0, 1fr);
+    gap: var(--sp-4);
+  }
+
+  .fd-chart-card { display: flex; flex-direction: column; min-height: 0; }
+  .fd-chart-card .chart-canvas-wrap { flex: 1; min-height: 0; height: auto; }
+
+  .fd-panel { display: flex; flex-direction: column; min-height: 0; margin: 0; }
+  .fd-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+}
+
+@media (max-width: 980px) {
+  .fd-page { display: flex; flex-direction: column; gap: var(--sp-4); }
+  .fd-chart-card .chart-canvas-wrap { --chart-h: 13rem; }
+}
+
+/* The same KPI cards every other page opens with — this page's job is the
+   numbers, so they get the full treatment, not the header-chip variant. Five
+   cards want a tighter floor than the default grid's, and a shade less height:
+   the viewport is a budget here, and every row the cards give up goes to the
+   chart and the list. */
+.fd-kpis, .lg-kpis { grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr)); flex: none; }
+.fd-kpis .kpi-card, .lg-kpis .kpi-card { padding: var(--sp-3) var(--sp-4); gap: var(--sp-1); }
+
+/* One short row: tabs, search, the missing-basket filter, reload. The panel is
+   half the page now, so the toolbar earns its keep by staying on one line —
+   nothing here is allowed to wrap or to be tall. */
+.fd-toolbar { flex-wrap: nowrap; padding: var(--sp-2) var(--sp-4); gap: var(--sp-2); }
+.fd-toolbar .lg-controls { flex: 1; min-width: 0; flex-wrap: nowrap; }
+.fd-toolbar .lg-search { flex: 1; min-width: 6rem; }
+.fd-toolbar .search-input { padding-top: 0.35rem; padding-bottom: 0.35rem; }
+.fd-toolbar .table-tab { padding: 0.35rem 0.7rem; }
+.fd-toolbar .fd-gap-toggle { white-space: nowrap; flex: none; }
+
+/* Period flips + the custom pair they reveal. */
+.fd-period-wrap { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.fd-custom { display: flex; align-items: center; gap: var(--sp-1); }
+.fd-custom[hidden] { display: none; }
+.fd-custom-sep { color: var(--text-muted); }
+.fd-date { width: 8.6rem; padding: 0.3rem 0.5rem; font-size: var(--fs-sm); }
+
+/* The day heading carries the same red the chart uses for a crossed target —
+   a dot, not a repaint: the number stays legible, the crossing stays loud. */
+.fd-day-kcal { font-variant-numeric: tabular-nums; }
+.fd-day-kcal.is-over { color: var(--danger); }
+.fd-day-kcal.is-over .fa-circle { font-size: 0.4rem; vertical-align: 0.15rem; margin-right: 0.3rem; }
+
+.fd-card-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.fd-card-kcal {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.fd-card-kcal.is-verified { color: var(--text-secondary); }
+
+.fd-kcal {
+  display: block;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  margin-top: var(--sp-1);
+}
+/* A short total is not a small meal. Dotted, not coloured: --warning would
+   read as "something is wrong with this meal" when what is incomplete is our
+   record of it. */
+.fd-kcal.is-partial {
+  border-bottom: 1px dotted var(--border-hover);
+  cursor: help;
+}
+.fd-partial {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
 
 @media (max-width: 640px) {
   .fd-cards { grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr)); gap: 0.5rem; }

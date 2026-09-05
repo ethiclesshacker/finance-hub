@@ -76,7 +76,11 @@ export const ASSET_COLORS = {
 export const CHART_DEFAULTS = {
   color: '#94a3b8',
   borderColor: 'rgba(148,163,184,0.1)',
-  font: { family: 'Inter', size: 11 },
+  // The bundled face registers as 'Inter Variable' (@fontsource-variable), not
+  // 'Inter'. A canvas font string with only an unknown family falls back to
+  // the browser default — which is how every chart spent months quietly
+  // rendering its ticks in Times New Roman.
+  font: { family: "'Inter Variable', Inter, system-ui, sans-serif", size: 11 },
 };
 
 export function applyChartDefaults() {
