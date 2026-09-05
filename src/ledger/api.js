@@ -108,6 +108,68 @@ export const foodCoverage = () => rpc('food_coverage', {});
 /** Correct one dish by hand. Writes source 'manual', which outranks the resolver. */
 export const setFoodItem = payload => rpc('food_upsert_item', { p_user_id: null, p_payload: payload });
 
+// The Dishes page edits the dictionary directly. The upsert function is the
+// resolver's door — it is rank-guarded and refuses to touch a verified row —
+// and a person correcting a number is exactly who should be allowed past
+// both. RLS still scopes every row to its owner.
+
+const DICT_COLUMNS = 'id, normalized_name, display_name, kcal, protein_g, carbs_g, fat_g, portion_g, category, source, confidence, verified, source_ref, updated_at';
+
+/** Every dish, priced or not, for the Dishes page. */
+export async function foodDictionaryAll() {
+  const { data, error } = await supabase.from('food_items').select(DICT_COLUMNS).order('display_name');
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+/**
+ * A person's numbers for one dish. Marked manual + verified, so no resolver
+ * run will ever revisit it, and it re-values every meal that ever had it.
+ */
+export async function updateFoodItem(id, fields) {
+  const patch = {
+    ...fields, source: 'manual', confidence: 1, verified: true,
+    source_ref: { entered_by: 'human', via: 'dishes page', at: new Date().toISOString() },
+  };
+  const { data, error } = await supabase.from('food_items').update(patch).eq('id', id).select(DICT_COLUMNS).single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+/** Forget the numbers and let the resolver estimate the dish again. */
+export async function resetFoodItem(id) {
+  const patch = {
+    kcal: null, protein_g: null, carbs_g: null, fat_g: null, portion_g: null,
+    source: 'llm', confidence: null, verified: false,
+    source_ref: { reset_by: 'human', via: 'dishes page', at: new Date().toISOString() },
+  };
+  const { data, error } = await supabase.from('food_items').update(patch).eq('id', id).select(DICT_COLUMNS).single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+/**
+ * Fold one dish into another. Every past meal that named the duplicate is
+ * rewritten to name the target, so counts and calories agree retroactively.
+ */
+export const mergeFoodItems = (targetId, duplicateId) =>
+  rpc('food_merge_items', { p_user_id: null, p_target_id: targetId, p_duplicate_id: duplicateId });
+
+/** A dish typed in by hand. Created through the upsert (it owns normalisation), then verified. */
+export async function createFoodItem(fields) {
+  const res = await setFoodItem({
+    ...fields, source: 'manual', confidence: 1,
+    source_ref: { entered_by: 'human', via: 'dishes page', at: new Date().toISOString() },
+  });
+  if (!res?.id) throw new Error('The dish was not created.');
+  if (res.action === 'kept_verified' || res.action === 'kept_stronger') {
+    throw new Error('That dish already exists — edit it in the list instead.');
+  }
+  const { data, error } = await supabase.from('food_items').update({ verified: true }).eq('id', res.id).select(DICT_COLUMNS).single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
 /** The last few ingestion runs — the "is this thing on?" indicator. */
 export async function recentRuns(limit = 5) {
   const { data, error } = await supabase

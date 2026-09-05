@@ -413,6 +413,30 @@
   {
     "type": "function",
     "function": {
+      "name": "merge_dishes",
+      "description": "Fold one dish spelling into another, retroactively: \"cheese slice and cheese slices are the same thing\". Every past meal that named the duplicate is rewritten to name the kept dish, so counts and calories stop being split in two. Pass the name to keep and the name to remove; both must already be in the dictionary. Irreversible — use only when the user says two names are one dish.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "keep",
+          "remove"
+        ],
+        "properties": {
+          "keep": {
+            "type": "string",
+            "description": "The dish name that stays."
+          },
+          "remove": {
+            "type": "string",
+            "description": "The duplicate spelling that is folded in and deleted."
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
       "name": "log_measurement",
       "description": "Record a body measurement — weight, waist, body fat. Use when the user states a reading: \"88.4 this morning\", \"waist is 96cm\". One reading per metric per day: telling it again the same day corrects the earlier value instead of duplicating it, so the user can re-weigh freely. Weight is the one that matters most here — it is the feedback loop for the daily calorie target — so when the user mentions weight in passing, offer to log it.",
       "parameters": {

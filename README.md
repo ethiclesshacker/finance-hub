@@ -114,6 +114,7 @@ Run the migrations in `supabase/migrations/` in order, via the Supabase SQL edit
 - `0005_nutrition.sql` — the dish dictionary and the calorie rollup. `food_items` holds one row per distinct thing you have eaten, not one per meal, so a year of eating resolves ~150 names rather than ~650 events. Populate it with `npm run ledger:nutrition`; the `ledger.nutrition` launchd job runs it twice a day, and `log_meal` prices its own dishes inline.
 - `0006_stated_calories.sql` — replaces the rollup functions: a calorie count stated on a line item (`kcal`) outranks the dictionary.
 - `0007_indb_source.sql` — registers `indb` (Anuvaad Indian Nutrient Databank, vegetarian subset) as a resolver source, ranked above FDC and below a printed label.
+- `0008_food_merge.sql` — `food_merge_items`: fold one dish spelling into another, rewriting past meals so the ranking and the calories stop counting it twice. Driven from `/#dishes`.
 
 `supabase/checks/rls_audit.sql` is a read-only audit: it reports whether RLS is enabled, whether every command is owner-scoped, which commands have no policy, and whether any row has a null `user_id`. Run it after any policy change.
 

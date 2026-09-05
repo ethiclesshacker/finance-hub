@@ -675,6 +675,37 @@ export const TOOLS = {
   // the calorie curve has to land as {metric, value, unit} every time, not as
   // whatever free text the day produced.
 
+  merge_dishes: {
+    description:
+      'Fold one dish spelling into another, retroactively: "cheese slice and cheese slices are the same thing". '
+      + 'Every past meal that named the duplicate is rewritten to name the kept dish, so counts and calories stop '
+      + 'being split in two. Pass the name to keep and the name to remove; both must already be in the dictionary. '
+      + 'Irreversible — use only when the user says two names are one dish.',
+    parameters: {
+      type: 'object', required: ['keep', 'remove'],
+      properties: {
+        keep: { type: 'string', description: 'The dish name that stays.' },
+        remove: { type: 'string', description: 'The duplicate spelling that is folded in and deleted.' },
+      },
+    },
+    handler: async (args) => {
+      const userId = await resolveUserId();
+      const find = async (name) => {
+        const key = normalizeName(name);
+        const { data, error } = await db().from('food_items').select('id, display_name')
+          .eq('user_id', userId).eq('normalized_name', key).maybeSingle();
+        if (error) throw new Error(`food_items: ${error.message}`);
+        if (data) return data;
+        const near = await rpc('food_match_item', { p_name: name, p_threshold: 0.3, p_limit: 5, p_user_id: userId }) || [];
+        throw new Error(`No dish named "${name}" in the dictionary. Closest: ${near.map(r => r.display_name).join(', ') || 'nothing'}.`);
+      };
+      const keep = await find(args.keep);
+      const remove = await find(args.remove);
+      if (keep.id === remove.id) throw new Error('Those are already the same dish.');
+      return rpc('food_merge_items', { p_user_id: userId, p_target_id: keep.id, p_duplicate_id: remove.id });
+    },
+  },
+
   log_measurement: {
     description:
       'Record a body measurement — weight, waist, body fat. Use when the user states a reading: '

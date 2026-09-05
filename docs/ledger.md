@@ -586,6 +586,22 @@ still new, and read the meal back. The receipt carries a `nutrition` block:
 (09:20 and 23:45) prices what email brought in and anything inline pricing
 could not settle.
 
+#### The dictionary is yours to edit — and to merge
+
+`/#dishes` in the app lists every dish with its numbers, how often it was
+eaten, and where the numbers came from. Editing a row writes `manual` +
+`verified`: the resolver never revisits it, and because the rollup reads the
+dictionary at render time the change re-values every meal that ever had the
+dish. Reset forgets the numbers so the next nutrition run estimates again.
+
+Merge is the other write, and it is a rewrite of the past rather than an
+alias: `food_merge_items(user, target, duplicate)` (0008) edits every event
+whose basket named the duplicate to name the target, fixes titles that carried
+the old spelling, lets the target inherit the duplicate's numbers if it had
+none, deletes the duplicate row, and records one `dish_merged` audit entry on
+top of the per-event ones the trigger writes. Hermes reaches the same function
+through `merge_dishes` ("cheese slice and cheese slices are the same").
+
 #### Meals get their own pair of tools
 
 `create_event` records that a meal happened. The Food screen is built on

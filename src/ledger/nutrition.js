@@ -180,6 +180,7 @@ export const SOURCE_LABEL = {
   curated:   'curated table',
   off:       'Open Food Facts label',
   fdc:       'USDA FoodData Central',
+  indb:      'Indian Nutrient Databank',
   llm:       'model estimate',
   heuristic: 'scaled from the bill',
 };

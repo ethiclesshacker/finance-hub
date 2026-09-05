@@ -3480,3 +3480,127 @@ input, select, textarea {
   .life-strip { grid-template-columns: 1fr; gap: 1rem; }
   .life-cats { border-left: 0; border-top: 1px solid var(--border); padding: 0.9rem 0 0; }
 }
+
+/* ---------- Dishes: the editable dictionary ----------
+   A plain table, because every row is the same five numbers and a person
+   editing them wants to compare down a column. It scrolls inside its own
+   section on a phone; the name column stays put so a row never loses its
+   label. Inputs sit in the cells they replace, so an edit does not move
+   anything. */
+.dd-section { overflow: visible; }
+.dd-toolbar { gap: var(--sp-3); }
+.dd-search-wrap { flex: 1 1 16rem; max-width: 24rem; min-width: 0; }
+.dd-search { min-height: var(--control-h); padding-block: 0; }
+.dd-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.dd-select {
+  width: auto;
+  min-height: var(--control-h);
+  padding-block: 0;
+  padding-right: 2.25rem;
+  font-size: var(--fs-sm);
+}
+.dd-count { font-size: var(--fs-sm); white-space: nowrap; }
+
+.dd-scroll {
+  overflow-x: auto;
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+.dd-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  min-width: 56rem;
+}
+.dd-table th,
+.dd-table td {
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+  text-align: left;
+  white-space: nowrap;
+}
+.dd-table thead th {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.dd-table .dd-num { text-align: right; }
+.dd-table .dd-col-name {
+  position: sticky;
+  left: 0;
+  background: var(--bg-card);
+  z-index: 1;
+  min-width: 14rem;
+  max-width: 22rem;
+  white-space: normal;
+}
+.dd-table thead .dd-col-name { background: var(--bg-elevated); z-index: 3; }
+.dd-row:hover td { background: var(--bg-hover); }
+.dd-row:hover .dd-col-name { background: var(--bg-hover); }
+.dd-row.is-editing td,
+.dd-row.is-editing .dd-col-name { background: var(--accent-dim); }
+.dd-name { font-size: var(--fs-base); font-weight: 600; color: var(--text-primary); }
+.dd-meta { font-size: var(--fs-xs); }
+.dd-kcal { font-weight: 700; color: var(--text-primary); }
+.dd-badge-verified {
+  background: var(--success-dim);
+  color: var(--success);
+  border: 1px solid var(--success-glow);
+}
+
+/* Column widths are pinned so a row switching to inputs does not re-lay out
+   the whole table under the cursor. */
+.dd-table th.dd-num { width: 6.5rem; }
+.dd-table th.dd-actions { width: 15rem; }
+.dd-actions { text-align: right; }
+.dd-actions .btn-icon { display: inline-flex; vertical-align: middle; }
+.dd-actions .btn-icon + .btn-icon { margin-left: var(--sp-1); }
+.dd-actions .btn-icon { opacity: 0.55; }
+.dd-row:hover .dd-actions .btn-icon,
+.dd-actions .btn-icon:focus-visible { opacity: 1; }
+.dd-edit-btns {
+  display: inline-flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--sp-2);
+  vertical-align: middle;
+}
+.dd-input {
+  width: 100%;
+  max-width: 6rem;
+  min-height: var(--control-h);
+  padding: 0 var(--sp-3);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.dd-input-name { width: 100%; min-width: 14rem; text-align: left; }
+.dd-reset.is-armed { color: var(--danger); border-color: var(--danger-glow); }
+
+.dd-merge td { background: var(--bg-elevated); white-space: normal; }
+.dd-merge-panel {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+.dd-merge-text { flex: 1 1 20rem; min-width: 0; font-size: var(--fs-sm); }
+.dd-merge-target { max-width: 22rem; }
+.dd-merge-actions { display: flex; gap: var(--sp-2); }
+
+@media (max-width: 900px) {
+  .dd-search-wrap { max-width: none; }
+  .dd-table { min-width: 48rem; }
+  .dd-actions .btn-icon { opacity: 1; }
+}
