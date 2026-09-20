@@ -13,7 +13,7 @@
 
 import { config, loadAccounts } from '../config.js';
 import { getConnector } from '../connectors/index.js';
-import { getCheckpoint, setCheckpoint, startRun, finishRun, resolveUserId } from '../db.js';
+import { getCheckpoint, setCheckpoint, startRun, finishRun, resolveUserId, syncCardPoints } from '../db.js';
 import { runPipeline } from '../pipeline.js';
 
 export async function ingestEmail(options = {}) {
@@ -102,6 +102,16 @@ export async function ingestEmail(options = {}) {
         metadata: { duration_ms: Date.now() - started },
       });
       summary.accounts.push({ account: account.key, ok: false, error: err.message });
+    }
+  }
+
+  // New card alerts become Points rows here, so the page is current without
+  // anyone opening it. Never fatal: the events are already safely in.
+  if (!options.dryRun) {
+    try {
+      summary.card_points = await syncCardPoints(userId);
+    } catch (err) {
+      summary.card_points = { error: err.message };
     }
   }
 

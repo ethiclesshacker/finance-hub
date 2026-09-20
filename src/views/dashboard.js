@@ -199,7 +199,9 @@ async function loadDashboardData() {
 
   const [nwRes, txRes, rdRes, eurRate] = await Promise.all([
     supabase.from('net_worth_entries').select('*').order('date', { ascending: true }),
-    supabase.from('cc_transactions').select('*'),
+    // The view, not the table: a row linked to a card alert takes its amount
+    // and date from the alert rather than from a typed copy.
+    supabase.from('cc_points').select('*'),
     supabase.from('cc_redemptions').select('*'),
     fetchEURtoINR(EUR_INR_FALLBACK),
   ]);

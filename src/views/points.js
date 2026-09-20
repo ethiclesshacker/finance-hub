@@ -6,7 +6,7 @@ import {
   formatINR, formatINRFull, formatPercent, formatDate, todayISO,
   destroyChart, makeCopyable, downloadCSV, escapeHTML, cssVar,
   openModal, closeModal, showToast, parseNum, fetchEURtoINR, CHART_COLORS, renderKpiCards,
-  numCell, rowActions, comboboxHTML, wireCombobox,
+  numCell, rowActions, callAttrs, comboboxHTML, wireCombobox,
 } from '../utils.js';
 
 // Grid.js applies these to both the header cell and every body cell in the
@@ -33,6 +33,15 @@ let merchantChartRef = null;
 let txTableGrid = null;
 let rdTableGrid = null;
 let activeTab = 'transactions';
+// Rows now arrive from the ledger as well as from this form (0012_card_points.sql):
+// `rules` maps the bank's merchant names to your labels, and `reconcile` is what
+// never paired — typed rows with no bank alert, and alerts with no row.
+let rules = [];
+let reconcile = { rows_without_event: [], events_without_row: [] };
+let filterBasis = '';
+let rulesGrid = null;
+let reconRowsGrid = null;
+let reconEventsGrid = null;
 let activeChartType = 'bar';
 let editingId = null;
 let editingType = null;
@@ -118,6 +127,8 @@ export async function renderPoints(container) {
         </div>
       </div>
 
+      <div id="pt-sync-banner"></div>
+
       <!-- Table section -->
       <div class="table-section">
         <div class="table-toolbar">
@@ -127,6 +138,12 @@ export async function renderPoints(container) {
             </button>
             <button type="button" class="table-tab" id="tab-redemptions">
               <i class="fas fa-plane-departure" style="margin-right:0.3rem"></i>Redemptions
+            </button>
+            <button type="button" class="table-tab" id="tab-rules">
+              <i class="fas fa-tags" style="margin-right:0.3rem"></i>Rules
+            </button>
+            <button type="button" class="table-tab" id="tab-reconcile">
+              <i class="fas fa-code-compare" style="margin-right:0.3rem"></i>Reconcile
             </button>
           </div>
           <div class="table-actions" style="display:flex;gap:0.5rem;align-items:center">
@@ -143,6 +160,8 @@ export async function renderPoints(container) {
         <div class="table-inner">
           <div id="pt-transactions-table"></div>
           <div id="pt-redemptions-table" style="display:none"></div>
+          <div id="pt-rules-table" style="display:none"></div>
+          <div id="pt-reconcile-table" style="display:none"></div>
         </div>
       </div>
     </div>
@@ -170,9 +189,11 @@ export async function renderPoints(container) {
   // Tab switching
   document.getElementById('tab-transactions').addEventListener('click', () => switchTab('transactions'));
   document.getElementById('tab-redemptions').addEventListener('click', () => switchTab('redemptions'));
+  document.getElementById('tab-rules').addEventListener('click', () => switchTab('rules'));
+  document.getElementById('tab-reconcile').addEventListener('click', () => switchTab('reconcile'));
 
   // FAB
-  document.getElementById('pt-fab').addEventListener('click', () => openForm(null, activeTab === 'transactions' ? 'transaction' : 'redemption'));
+  document.getElementById('pt-fab').addEventListener('click', () => openForm(null, activeTab === 'redemptions' ? 'redemption' : 'transaction'));
 
   // Export
   document.getElementById('pt-export-btn').addEventListener('click', exportCSV);
@@ -184,17 +205,26 @@ export async function renderPoints(container) {
   document.getElementById('pt-search').addEventListener('input', e => {
     searchTerm = e.target.value.toLowerCase();
     if (activeTab === 'transactions') renderTxTable();
-    else renderRdTable();
+    else if (activeTab === 'redemptions') renderRdTable();
+    else if (activeTab === 'rules') renderRulesTable();
   });
 
   await loadData();
 }
 
 async function loadData() {
-  const [txRes, rdRes, rate] = await Promise.all([
-    supabase.from('cc_transactions').select('*').order('date', { ascending: false }),
+  // Pick up any spend on the card the ledger has seen since the last visit.
+  // Idempotent and cheap; a failure here must not stop the page loading.
+  await supabase.rpc('cc_sync_from_events').then(() => {}, () => {});
+
+  // cc_points is cc_transactions as it should be read: for a row linked to a
+  // ledger event, the date and amount are the bank's, not a typed copy.
+  const [txRes, rdRes, rate, rulesRes, reconRes] = await Promise.all([
+    supabase.from('cc_points').select('*').order('date', { ascending: false }),
     supabase.from('cc_redemptions').select('*').order('date', { ascending: false }),
     fetchEURtoINR(EUR_INR_FALLBACK),
+    supabase.from('cc_merchant_rules').select('*').order('uses', { ascending: false }),
+    supabase.rpc('cc_reconcile'),
   ]);
 
   const failure = txRes.error || rdRes.error;
@@ -206,6 +236,8 @@ async function loadData() {
   transactions = txRes.data || [];
   redemptions  = rdRes.data || [];
   eurRate = rate;
+  rules = rulesRes.data || [];
+  reconcile = reconRes.data || { rows_without_event: [], events_without_row: [] };
 
   // Update FX badge
   const badge = document.getElementById('fx-rate-badge');
@@ -217,6 +249,39 @@ async function loadData() {
   renderTableFilters();
   renderTxTable();
   renderRdTable();
+  renderRulesTable();
+  renderReconcile();
+  renderSyncBanner();
+}
+
+// ── What the ledger added, and what never paired ───────
+
+function renderSyncBanner() {
+  const el = document.getElementById('pt-sync-banner');
+  if (!el) return;
+  const assumed = transactions.filter(t => t.basis === 'assumed').length;
+  const loose = reconcile.rows_without_event.length + reconcile.events_without_row.length;
+  if (!assumed && !loose) { el.innerHTML = ''; return; }
+
+  const parts = [];
+  if (assumed) {
+    parts.push(`<span><strong>${assumed}</strong> ${assumed === 1 ? 'row was' : 'rows were'} added from your card alerts with an assumed label and multiplier.</span>
+      <button type="button" class="btn-sm btn-accent" id="pt-show-assumed">${filterBasis === 'assumed' ? 'Show all' : 'Review'}</button>`);
+  }
+  if (loose) {
+    parts.push(`<span><strong>${reconcile.rows_without_event.length}</strong> typed ${reconcile.rows_without_event.length === 1 ? 'row has' : 'rows have'} no card alert, and
+      <strong>${reconcile.events_without_row.length}</strong> ${reconcile.events_without_row.length === 1 ? 'alert has' : 'alerts have'} no row.</span>
+      <button type="button" class="btn-sm btn-ghost" id="pt-go-reconcile">Reconcile</button>`);
+  }
+  el.innerHTML = `<div class="pt-banner">${parts.map(p => `<div class="pt-banner-item">${p}</div>`).join('')}</div>`;
+
+  document.getElementById('pt-show-assumed')?.addEventListener('click', () => {
+    filterBasis = filterBasis === 'assumed' ? '' : 'assumed';
+    switchTab('transactions');
+    renderTxTable();
+    renderSyncBanner();
+  });
+  document.getElementById('pt-go-reconcile')?.addEventListener('click', () => switchTab('reconcile'));
 }
 
 // ── KPI Cards ──────────────────────────────────────────
@@ -415,6 +480,8 @@ function renderTableFilters() {
       filterMerchant = e.target.value;
       renderTxTable();
     });
+  } else if (activeTab !== 'redemptions') {
+    container.innerHTML = '';
   } else {
     const partners = [...new Set(redemptions.map(r => r.partner))].filter(Boolean).sort();
     container.innerHTML = `
@@ -433,10 +500,10 @@ function renderTableFilters() {
 // ── Tables ───────────────────────────────────────────────
 function switchTab(tab) {
   activeTab = tab;
-  document.getElementById('tab-transactions').classList.toggle('active', tab === 'transactions');
-  document.getElementById('tab-redemptions').classList.toggle('active', tab === 'redemptions');
-  document.getElementById('pt-transactions-table').style.display = tab === 'transactions' ? '' : 'none';
-  document.getElementById('pt-redemptions-table').style.display = tab === 'redemptions' ? '' : 'none';
+  for (const name of ['transactions', 'redemptions', 'rules', 'reconcile']) {
+    document.getElementById(`tab-${name}`).classList.toggle('active', tab === name);
+    document.getElementById(`pt-${name}-table`).style.display = tab === name ? '' : 'none';
+  }
   renderTableFilters();
 }
 
@@ -446,6 +513,9 @@ function renderTxTable() {
   if (txTableGrid) { try { txTableGrid.destroy(); } catch(_) {} }
 
   let filtered = transactions;
+  if (filterBasis) {
+    filtered = filtered.filter(t => t.basis === filterBasis);
+  }
   if (filterMultiplier) {
     filtered = filtered.filter(t => String(t.multiplier) === filterMultiplier);
   }
@@ -464,12 +534,14 @@ function renderTxTable() {
     const pts = calcPoints(t);
     return [
       formatDate(t.date),
-      t.merchant,
+      gridHtml(merchantCell(t)),
       t.description || '—',
-      gridHtml(numCell(formatINRFull(parseNum(t.amount)), { bold: true })),
+      gridHtml(amountCell(t)),
       gridHtml(`<span class="badge ${getMultiplierBadgeClass(t.multiplier)}">${escapeHTML(t.multiplier)}×</span>`),
       gridHtml(numCell(Math.round(pts).toLocaleString('en-IN'), { tone: 'success', bold: true })),
-      gridHtml(rowActions(`window.__ptTxEdit('${t.id}')`, `window.__ptTxDelete('${t.id}')`, 'transaction')),
+      gridHtml((t.basis === 'assumed'
+        ? `<button type="button" class="btn-sm btn-accent pt-confirm" ${callAttrs(`window.__ptTxConfirm('${t.id}')`)} title="The label and multiplier are right">Confirm</button>`
+        : '') + rowActions(`window.__ptTxEdit('${t.id}')`, `window.__ptTxDelete('${t.id}')`, 'transaction')),
     ];
   });
 
@@ -493,11 +565,203 @@ function renderTxTable() {
     const t = transactions.find(t => t.id === id);
     if (t) openForm(t, 'transaction');
   };
+  window.__ptTxConfirm = async (id) => {
+    const { error } = await supabase.rpc('cc_confirm', { p_id: id });
+    if (error) { showToast('Could not confirm: ' + error.message, 'error'); return; }
+    showToast('Confirmed.');
+    await loadData();
+  };
   window.__ptTxDelete = async (id) => {
     if (!confirm('Delete this transaction?')) return;
     const { error } = await supabase.from('cc_transactions').delete().eq('id', id);
     if (error) { showToast('Delete failed: ' + error.message, 'error'); return; }
     showToast('Transaction deleted.');
+    await loadData();
+  };
+}
+
+/** The label, with where the row came from and whether anyone has looked at it. */
+function merchantCell(t) {
+  const bits = [escapeHTML(t.merchant || '—')];
+  if (t.basis === 'assumed') bits.push('<span class="badge badge-yellow" title="Added from a card alert. The label and multiplier are assumed from earlier spends at this merchant.">Assumed</span>');
+  if (t.merchant && t.merchant === settings.get('cc_work_label')) bits.push('<span class="badge badge-blue" title="Counted as work spend">Work</span>');
+  const bank = t.raw_merchant && t.raw_merchant !== t.merchant
+    ? `<div class="pt-bank-name" title="The merchant name on the card alert">${escapeHTML(t.raw_merchant)}</div>` : '';
+  return `<div class="pt-merchant">${bits.join(' ')}</div>${bank}`;
+}
+
+/** The bank's amount when there is one; what you typed stays visible if it differed. */
+function amountCell(t) {
+  const main = numCell(formatINRFull(parseNum(t.amount)), { bold: true });
+  if (t.amount_typed === null || t.amount_typed === undefined) return main;
+  return `${main}<div class="pt-typed" title="The card alert said ${escapeHTML(formatINRFull(parseNum(t.amount)))}; the bank's figure is used">typed ${escapeHTML(formatINRFull(parseNum(t.amount_typed)))}</div>`;
+}
+
+// ── Rules ──────────────────────────────────────────────
+//
+// This is the table to curate. A rule says: when the card alert names THIS
+// merchant, file it under THAT label at THIS multiplier. They were learned from
+// the rows typed by hand; editing one makes it yours and stops it being relearned.
+
+function renderRulesTable() {
+  const container = document.getElementById('pt-rules-table');
+  if (!container) return;
+  if (rulesGrid) { try { rulesGrid.destroy(); } catch (_) {} }
+
+  const workLabel = settings.get('cc_work_label');
+  const shown = searchTerm
+    ? rules.filter(r => r.ledger_merchant?.toLowerCase().includes(searchTerm) || r.label?.toLowerCase().includes(searchTerm))
+    : rules;
+
+  rulesGrid = new Grid({
+    columns: [
+      { name: 'On the card alert' },
+      { name: 'Your label' },
+      { name: 'Multiplier' },
+      { name: 'Seen', attributes: NUMERIC_COL },
+      { name: 'Rule' },
+      { name: 'Actions', sort: false, attributes: ACTIONS_COL },
+    ],
+    data: shown.map(r => [
+      r.ledger_merchant,
+      gridHtml(`${escapeHTML(r.label)}${r.label === workLabel ? ' <span class="badge badge-blue">Work</span>' : ''}`),
+      gridHtml(`<span class="badge ${getMultiplierBadgeClass(r.multiplier)}">${escapeHTML(r.multiplier)}×</span>`),
+      gridHtml(numCell(String(r.uses))),
+      gridHtml(r.source === 'manual'
+        ? '<span class="badge badge-green">Yours</span>'
+        : r.ambiguous
+          ? '<span class="badge badge-yellow" title="You have filed this merchant under more than one label. The rule uses the most common one.">Learned · mixed</span>'
+          : '<span class="badge">Learned</span>'),
+      gridHtml(rowActions(`window.__ptRuleEdit('${encodeURIComponent(r.merchant_key)}')`, `window.__ptRuleDelete('${encodeURIComponent(r.merchant_key)}')`, 'rule')),
+    ]),
+    pagination: { limit: 12 },
+    sort: true,
+    language: { noRecordsFound: 'No rules yet. They are learned from rows linked to a card alert.' },
+  }).render(container);
+
+  window.__ptRuleEdit = (key) => {
+    const rule = rules.find(r => r.merchant_key === decodeURIComponent(key));
+    if (rule) openRuleForm(rule);
+  };
+  window.__ptRuleDelete = async (key) => {
+    if (!confirm('Delete this rule? New spends at this merchant will arrive under the bank\'s own name at 2×.')) return;
+    const { error } = await supabase.from('cc_merchant_rules').delete().eq('merchant_key', decodeURIComponent(key));
+    if (error) { showToast('Delete failed: ' + error.message, 'error'); return; }
+    showToast('Rule deleted.');
+    await loadData();
+  };
+}
+
+function openRuleForm(rule) {
+  openModal(`
+    <div class="modal-header">
+      <h3 class="modal-title">Rule for ${escapeHTML(rule.ledger_merchant)}</h3>
+      <button class="modal-close" id="pt-modal-close" aria-label="Close"><i class="fas fa-xmark"></i></button>
+    </div>
+    <div id="pt-form-body">
+      <div class="form-group">
+        <label class="form-label" for="pt-r-label">File it under</label>
+        ${comboboxHTML({ id: 'pt-r-label', value: rule.label, placeholder: 'Search or type a new one', options: usedBefore(t => t.merchant) })}
+        <div class="form-hint">Use “${escapeHTML(settings.get('cc_work_label'))}” to count spends here as work.</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="pt-r-multiplier">Multiplier</label>
+        <select class="form-select" id="pt-r-multiplier">
+          ${MULTIPLIER_OPTIONS.map(m => `<option value="${m.value}" ${rule.multiplier == m.value ? 'selected' : ''}>${m.label}</option>`).join('')}
+        </select>
+      </div>
+      <label class="pt-check"><input type="checkbox" id="pt-r-apply" checked />
+        <span>Also apply to rows at this merchant that are still assumed</span></label>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" id="pt-form-cancel">Cancel</button>
+      <button class="btn-submit" id="pt-rule-submit">Save rule</button>
+    </div>
+  `);
+  wireCombobox('pt-r-label');
+  document.getElementById('pt-modal-close').addEventListener('click', closeModal);
+  document.getElementById('pt-form-cancel').addEventListener('click', closeModal);
+  document.getElementById('pt-rule-submit').addEventListener('click', async () => {
+    const label = document.getElementById('pt-r-label').value.trim();
+    const multiplier = parseNum(document.getElementById('pt-r-multiplier').value);
+    if (!label) { showToast('A rule needs a label.', 'error'); return; }
+
+    const { error } = await supabase.from('cc_merchant_rules')
+      .update({ label, multiplier, source: 'manual', ambiguous: false, updated_at: new Date().toISOString() })
+      .eq('merchant_key', rule.merchant_key);
+    if (error) { showToast('Save failed: ' + error.message, 'error'); return; }
+
+    if (document.getElementById('pt-r-apply').checked) {
+      const waiting = transactions.filter(t => t.basis === 'assumed' && t.raw_merchant
+        && t.raw_merchant.toLowerCase() === rule.ledger_merchant.toLowerCase());
+      for (const t of waiting) {
+        await supabase.from('cc_transactions').update({ merchant: label, multiplier }).eq('id', t.id);
+      }
+    }
+    closeModal();
+    showToast('Rule saved.');
+    await loadData();
+  });
+}
+
+// ── Reconcile ──────────────────────────────────────────
+//
+// Two lists that should both be short. A typed row with no card alert is fine
+// when the alert never came; it is a problem when the alert is sitting in the
+// other list under a different amount. Linking keeps your label, multiplier and
+// points, and takes the amount and date from the bank.
+
+function renderReconcile() {
+  const container = document.getElementById('pt-reconcile-table');
+  if (!container) return;
+  for (const g of [reconRowsGrid, reconEventsGrid]) { if (g) { try { g.destroy(); } catch (_) {} } }
+
+  container.innerHTML = `
+    <div class="pt-recon-head">Typed rows with no card alert <span class="pt-recon-count">${reconcile.rows_without_event.length}</span></div>
+    <p class="pt-recon-note">If a likely alert exists it is suggested. Link it and the bank's amount and date take over; your label, multiplier and points stay. With no suggestion, the alert probably never arrived and the row is fine as it is.</p>
+    <div id="pt-recon-rows"></div>
+    <div class="pt-recon-head">Card alerts with no row <span class="pt-recon-count">${reconcile.events_without_row.length}</span></div>
+    <p class="pt-recon-note">Spends the ledger saw on this card before automatic rows began. Add a row for any that earned points and was never entered.</p>
+    <div id="pt-recon-events"></div>`;
+
+  reconRowsGrid = new Grid({
+    columns: [{ name: 'Date' }, { name: 'Label' }, { name: 'Amount', attributes: NUMERIC_COL }, { name: 'Likely card alert' }, { id: 'act', name: '', sort: false, attributes: ACTIONS_COL }],
+    data: reconcile.rows_without_event.map(r => [
+      formatDate(r.date), r.label, gridHtml(numCell(formatINRFull(parseNum(r.amount)), { bold: true })),
+      r.suggestion
+        ? gridHtml(`${escapeHTML(formatDate(r.suggestion.date))} · ${escapeHTML(r.suggestion.merchant || 'unnamed')} · <strong>${escapeHTML(formatINRFull(parseNum(r.suggestion.amount)))}</strong>
+            <div class="pt-bank-name">${escapeHTML(r.suggestion.why)}</div>`)
+        : gridHtml('<span class="pt-bank-name">None found</span>'),
+      r.suggestion
+        ? gridHtml(`<button type="button" class="btn-sm btn-accent" ${callAttrs(`window.__ptLink('${r.id}','${r.suggestion.event_id}')`)}>Link</button>`)
+        : '',
+    ]),
+    pagination: { limit: 8 }, sort: true,
+    language: { noRecordsFound: 'Every typed row is linked to a card alert.' },
+  }).render(document.getElementById('pt-recon-rows'));
+
+  reconEventsGrid = new Grid({
+    columns: [{ name: 'Date' }, { name: 'On the card alert' }, { name: 'Amount', attributes: NUMERIC_COL }, { name: 'Would be filed under' }, { id: 'act', name: '', sort: false, attributes: ACTIONS_COL }],
+    data: reconcile.events_without_row.map(e => [
+      formatDate(e.date), e.merchant || e.title || 'unnamed',
+      gridHtml(numCell(formatINRFull(parseNum(e.amount)), { bold: true })),
+      e.would_be_label || '—',
+      gridHtml(`<button type="button" class="btn-sm btn-ghost" ${callAttrs(`window.__ptCreate('${e.event_id}')`)}>Add row</button>`),
+    ]),
+    pagination: { limit: 8 }, sort: true,
+    language: { noRecordsFound: 'Every spend on the card has a row.' },
+  }).render(document.getElementById('pt-recon-events'));
+
+  window.__ptLink = async (id, eventId) => {
+    const { error } = await supabase.rpc('cc_link', { p_id: id, p_event_id: eventId });
+    if (error) { showToast('Could not link: ' + error.message, 'error'); return; }
+    showToast('Linked. The bank\'s amount and date now apply.');
+    await loadData();
+  };
+  window.__ptCreate = async (eventId) => {
+    const { error } = await supabase.rpc('cc_create_from_event', { p_event_id: eventId });
+    if (error) { showToast('Could not add: ' + error.message, 'error'); return; }
+    showToast('Row added as assumed. Confirm it in Transactions.');
     await loadData();
   };
 }
@@ -577,7 +841,8 @@ function openForm(data, type) {
     <div class="form-row">
       <div class="form-group">
         <label class="form-label">Date</label>
-        <input type="date" class="form-input" id="pt-f-date" value="${escapeHTML(data?.date || todayISO())}" />
+        <input type="date" class="form-input" id="pt-f-date" value="${escapeHTML(data?.date || todayISO())}" ${data?.event_id ? 'disabled' : ''} />
+        ${data?.event_id ? '<div class="form-hint">From the card alert</div>' : ''}
       </div>
       <div class="form-group">
         <label class="form-label">Multiplier</label>
@@ -601,6 +866,7 @@ function openForm(data, type) {
     </div>
     <div class="form-group">
       <label class="form-label" for="pt-f-desc">Description (optional)</label>
+      ${data?.event_id ? '<div class="form-hint">Saved on the ledger event, so it shows in Life, search and summaries too.</div>' : ''}
       ${comboboxHTML({
         id: 'pt-f-desc',
         value: data?.description || '',
@@ -611,7 +877,8 @@ function openForm(data, type) {
     <div class="form-row">
       <div class="form-group">
         <label class="form-label">Amount (₹)</label>
-        <input type="number" class="form-input" id="pt-f-amount" placeholder="0" min="0" step="0.01" value="${escapeHTML(data?.amount ?? '')}" />
+        <input type="number" class="form-input" id="pt-f-amount" placeholder="0" min="0" step="0.01" value="${escapeHTML(data?.amount ?? '')}" ${data?.event_id ? 'disabled' : ''} />
+        ${data?.event_id ? '<div class="form-hint">From the card alert</div>' : ''}
       </div>
       <div class="form-group">
         <label class="form-label">Points Override</label>
@@ -619,6 +886,9 @@ function openForm(data, type) {
         <div class="form-hint">Leave blank to auto-calculate</div>
       </div>
     </div>
+    ${data?.event_id && data?.raw_merchant ? `
+      <label class="pt-check"><input type="checkbox" id="pt-f-remember" ${data.basis === 'assumed' ? 'checked' : ''} />
+        <span>Remember this label and multiplier for <strong>${escapeHTML(data.raw_merchant)}</strong></span></label>` : ''}
     <!-- Preview -->
     <div style="background:var(--bg-elevated);border-radius:var(--radius-md);padding:0.85rem 1rem;border:1px solid var(--border);font-size:0.85rem">
       <span style="color:var(--text-muted)">Auto-calculated points: </span>
@@ -801,7 +1071,24 @@ async function submitForm() {
     }
     if (editingId) payload.id = editingId;
 
-    ({ error } = await supabase.from('cc_transactions').upsert([payload]));
+    const current = editingId ? transactions.find(t => t.id === editingId) : null;
+    if (current?.event_id) {
+      // Linked to a card alert: the date and amount are the bank's and are not
+      // written, and the note is written through to the event, which is where
+      // it lives. Any save confirms an assumed row — editing it is looking at it.
+      ({ error } = await supabase.rpc('cc_confirm', {
+        p_id: editingId, p_label: payload.merchant, p_multiplier: payload.multiplier,
+        p_points: payload.points, p_remember: Boolean(document.getElementById('pt-f-remember')?.checked),
+        p_description: payload.description ?? '',
+      }));
+      // cc_confirm keeps an existing points override when given null, so
+      // clearing the override has to be said separately.
+      if (!error && payload.points === null && current.points !== null) {
+        ({ error } = await supabase.from('cc_transactions').update({ points: null }).eq('id', editingId));
+      }
+    } else {
+      ({ error } = await supabase.from('cc_transactions').upsert([payload]));
+    }
   } else {
     const payload = {
       date:            document.getElementById('pt-f-date')?.value,
