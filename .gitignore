@@ -37,3 +37,6 @@ ledger/accounts.json
 
 # Local cost ledger — operational data about this machine, not project state.
 ledger/costs.jsonl
+
+# Supabase CLI link state
+supabase/.temp/
