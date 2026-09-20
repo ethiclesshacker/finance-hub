@@ -1167,3 +1167,48 @@ test('a number with a unit after it is a quantity, not rupees', () => {
   assert.equal(parseMealEntry('had 100 g cashews', { timeZone: tz })?.parsed.amount ?? null, null);
   assert.equal(parseMealEntry('dinner at Nagarjuna 1250', { timeZone: tz })?.parsed.amount, 1250);
 });
+
+// ── Which way money went ───────────────────────────────
+import { moneyFlow } from '../src/ledger/summary.js';
+
+test('moneyFlow: moving money between your own pockets is neither spend nor income', () => {
+  for (const subtype of ['self_transfer', 'credit_card_bill_repayment', 'card_bill_payment', 'scheduled_bill_payment']) {
+    for (const direction of ['debit', 'credit', undefined]) {
+      assert.equal(moneyFlow({ type: 'transfer', subtype, data: { amount: 15000, direction } }), null, `${subtype}/${direction}`);
+    }
+  }
+});
+
+test('moneyFlow: arrivals are income even when the bank gave no direction', () => {
+  for (const subtype of ['credit', 'refund', 'interest_credit', 'dividend', 'cashback', 'reward']) {
+    assert.equal(moneyFlow({ type: 'transfer', subtype, data: { amount: 10 } }), 'inflow', subtype);
+  }
+  assert.equal(moneyFlow({ type: 'transfer', subtype: 'something_new', data: { direction: 'credit' } }), 'inflow');
+  assert.equal(moneyFlow({ type: 'purchase', data: { direction: 'credit' } }), 'inflow');
+});
+
+test('moneyFlow: money that left for good is spend', () => {
+  assert.equal(moneyFlow({ type: 'transfer', subtype: 'payment', data: { direction: 'debit' } }), 'spend');
+  assert.equal(moneyFlow({ type: 'transfer', subtype: 'payment', data: {} }), 'spend');
+  assert.equal(moneyFlow({ type: 'transfer', subtype: 'insurance_premium', data: {} }), 'spend');
+  assert.equal(moneyFlow({ type: 'purchase', data: {} }), 'spend');
+  assert.equal(moneyFlow({ type: 'food', data: { direction: 'debit' } }), 'spend');
+});
+
+test('moneyFlow: a transfer nobody can place counts as nothing, not as income', () => {
+  assert.equal(moneyFlow({ type: 'transfer', subtype: 'something_new', data: {} }), null);
+  assert.equal(moneyFlow({ type: 'transfer', data: {} }), null);
+});
+
+test('buildDigest no longer reports a self-transfer or a card bill as money in', () => {
+  const at = '2026-09-19T06:00:00Z';
+  const digest = buildDigest([
+    { id: '1', type: 'transfer', subtype: 'self_transfer', occurred_at: at, title: 'Own accounts', data: { amount: 15000, direction: 'debit' }, status: 'confirmed' },
+    { id: '2', type: 'transfer', subtype: 'card_bill_payment', occurred_at: at, title: 'Card bill', data: { amount: 40000 }, status: 'confirmed' },
+    { id: '3', type: 'transfer', subtype: 'credit', occurred_at: at, title: 'Salary', data: { amount: 90000, direction: 'credit' }, status: 'confirmed' },
+    { id: '4', type: 'purchase', occurred_at: at, title: 'Shoes', data: { amount: 3000 }, status: 'confirmed' },
+    { id: '5', type: 'transfer', subtype: 'payment', occurred_at: at, title: 'Paid a friend', data: { amount: 500, direction: 'debit' }, status: 'confirmed' },
+  ], { timeZone: 'Asia/Kolkata' });
+  assert.equal(digest.inflow.total, 90000);
+  assert.equal(digest.spend.total, 3500);
+});

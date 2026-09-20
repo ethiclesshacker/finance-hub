@@ -16,16 +16,45 @@
 import { localDateISO } from './normalize.js';
 import { typeMeta } from './taxonomy.js';
 
+// Moving money between your own pockets: it left one account and arrived in
+// another, or it paid off a card whose spends were already counted one by one.
+const OWN_POCKETS = new Set(['self_transfer', 'credit_card_bill_repayment', 'card_bill_payment', 'scheduled_bill_payment']);
+// A transfer that is money arriving, even when the bank's email gave no direction.
+const ARRIVALS = new Set(['credit', 'refund', 'interest_credit', 'dividend', 'cashback', 'reward']);
+// A transfer that is money leaving for good.
+const DEPARTURES = new Set(['payment', 'insurance_premium']);
+
 /**
- * Money coming in — a refund, a salary credit, a card bill payment. It has an
- * amount, but adding it to spending would make every total wrong in the
- * flattering direction.
+ * Which way an event's amount counts: 'spend', 'inflow', or null for neither.
+ *
+ * There used to be three versions of this rule — here, in ledger_stats() and
+ * in life_days() — and all three were wrong in a different direction. The two
+ * older ones called every transfer an inflow, so ₹15,000 moved between your own
+ * accounts and every card bill you paid were reported as money coming in: lakhs
+ * of income that never existed. The newest counted no transfer as inflow at
+ * all, so a salary credit vanished. This is the one rule; public.ledger_money_flow()
+ * in 0017_money_flow.sql is its twin. Change one, change both.
+ */
+export function moneyFlow(event) {
+  const direction = event?.data?.direction;
+  if (event?.type === 'transfer') {
+    const subtype = event?.subtype;
+    if (OWN_POCKETS.has(subtype)) return null;
+    if (DEPARTURES.has(subtype)) return direction === 'credit' ? 'inflow' : 'spend';
+    if (direction === 'credit' || ARRIVALS.has(subtype)) return 'inflow';
+    return null;
+  }
+  return direction === 'credit' ? 'inflow' : 'spend';
+}
+
+/**
+ * "Does this stay out of spend?" — true for an inflow and for money that only
+ * moved between your own pockets. Kept under its old name because that is the
+ * question every caller was asking: they all use it to decide what NOT to add
+ * to a spending total. For an actual inflow total, use moneyFlow().
  */
 export function isInflow(event) {
-  // A transfer stays out of spend — a self-transfer is neither — except money
-  // paid out to a person: "paid Rahul ₹2,000" was spent, whatever it settled.
-  if (event?.type === 'transfer') return !(event?.subtype === 'payment' && event?.data?.direction === 'debit');
-  return event?.data?.direction === 'credit';
+  return moneyFlow(event) !== 'spend';
 }
 
 /**
@@ -43,7 +72,9 @@ export function buildDigest(events, { timeZone = 'Asia/Kolkata', from = null, to
   for (const event of live) {
     const amount = Number(event.data?.amount);
     if (!Number.isFinite(amount)) continue;
-    if (isInflow(event)) { inflowTotal += amount; continue; }
+    const flow = moneyFlow(event);
+    if (flow === 'inflow') { inflowTotal += amount; continue; }
+    if (flow !== 'spend') continue;   // between your own pockets: neither
     const bucket = event.data?.category || event.subtype || event.type;
     spend[bucket] = (spend[bucket] || 0) + amount;
     spendTotal += amount;

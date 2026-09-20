@@ -35,8 +35,8 @@
 -- Nothing here writes, and nothing here changes a grant on an existing object.
 --
 -- Run order: after 0010_health_api.sql. Additive; safe to re-run — but
--- 0012_card_points.sql replaces finance_card_points() with a fuller version, so
--- if this file is ever re-run on its own, run 0012 again after it.
+-- later files replace finance_card_points() with a fuller version (0012, then
+-- 0014), so if this file is ever re-run on its own, run 0014 again after it.
 -- ============================================================
 
 
@@ -320,9 +320,10 @@ $$;
 -- once, by health.reader(), and every read below is filtered to that user
 -- explicitly rather than left to RLS.
 --
--- The money rule is src/ledger/summary.js isInflow(), restated: a transfer is
--- not spending, except money paid out to a person; a credit is an inflow; a
--- self-transfer is neither.
+-- Which way an amount counts is public.ledger_money_flow() (0017_money_flow.sql),
+-- the one rule shared with ledger_stats() and with moneyFlow() in the browser.
+-- 0017 must exist before this function is CALLED; plpgsql resolves it at run
+-- time, so the two files can be applied in number order.
 --
 -- Energy balance is only as good as its weaker half. Burned comes from a
 -- sensor worn all day. Eaten comes from receipts and what you told Hermes, so
@@ -373,7 +374,7 @@ begin
   ev as (
     select (e.occurred_at at time zone v_tz)::date as day, e.type, e.subtype,
            case when (e.data ->> 'amount') ~ '^-?[0-9]+(\.[0-9]+)?$' then (e.data ->> 'amount')::numeric end as amount,
-           e.data ->> 'direction' as direction
+           public.ledger_money_flow(e.type, e.subtype, e.data) as flow
       from public.events e
      where e.user_id = v_user and e.status <> 'dismissed'
        and e.occurred_at >= (p_from::timestamp at time zone v_tz)
@@ -381,10 +382,8 @@ begin
   ),
   money as (
     select ev.day, count(*) as events,
-           sum(ev.amount) filter (where ev.amount is not null and (
-                 (ev.type = 'transfer' and ev.subtype = 'payment' and ev.direction = 'debit')
-              or (ev.type <> 'transfer' and ev.direction is distinct from 'credit'))) as spend,
-           sum(ev.amount) filter (where ev.amount is not null and ev.type <> 'transfer' and ev.direction = 'credit') as inflow
+           sum(ev.amount) filter (where ev.flow = 'spend')  as spend,
+           sum(ev.amount) filter (where ev.flow = 'inflow') as inflow
       from ev group by ev.day
   ),
   work as (

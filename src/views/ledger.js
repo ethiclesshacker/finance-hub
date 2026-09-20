@@ -17,7 +17,7 @@ import { EVENT_TYPES, STATUSES, SOURCE_TYPES, SUBTYPES, typeMeta, statusMeta, so
 import { parseQuickEntry } from '../ledger/nlparse.js';
 import { summariseItems } from '../ledger/items.js';
 import { localDateISO } from '../ledger/normalize.js';
-import { isInflow } from '../ledger/summary.js';
+import { isInflow, moneyFlow } from '../ledger/summary.js';
 import * as settings from '../settings.js';
 import {
   escapeHTML, formatINRFull, openModal, closeModal, showToast, todayISO, downloadCSV,
@@ -403,7 +403,9 @@ function renderRow(event) {
   const status = statusMeta(event.status);
   const source = sourceMeta(event.source_type);
   const amount = Number(event.data?.amount);
-  const inflow = isInflow(event);
+  // Green and signed only for money that actually arrived — not for a transfer
+  // between your own accounts, which is neither in nor out.
+  const inflow = moneyFlow(event) === 'inflow';
 
   // Everything that is not the amount. The amount used to appear twice — once
   // inside the title the extractor wrote and again in this line — so it is now

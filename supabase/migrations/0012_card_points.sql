@@ -68,7 +68,10 @@
 -- the bank's figure) as a transaction you never entered — and creating a row for it
 -- would count those points twice.
 --
--- Run order: after 0011_life_api.sql. Safe to re-run.
+-- Run order: after 0011_life_api.sql. Run once, in order: 0013 and 0014 replace
+-- several functions defined here and widen the cc_points view, so re-running
+-- this file on its own after them would undo their changes (and the view
+-- cannot be narrowed). To re-apply, run 0012, 0013 and 0014 together.
 -- ============================================================
 
 
