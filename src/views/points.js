@@ -33,15 +33,24 @@ let merchantChartRef = null;
 let txTableGrid = null;
 let rdTableGrid = null;
 let activeTab = 'transactions';
+
+// One grammar for every note, shown in the box itself so it never has to be
+// remembered. Notes live on ledger events now, so a consistent shape is what
+// lets a question like "flights for one person this year" find all of them:
+//   Type: detail | who | when
+// `who` and `when` are optional, and only there when they add something.
+const NOTE_PLACEHOLDER = 'Type: detail | who | when   e.g. Flight: BLR x CCU | Asha | Apr';
 // Rows now arrive from the ledger as well as from this form (0012_card_points.sql):
 // `rules` maps the bank's merchant names to your labels, and `reconcile` is what
 // never paired — typed rows with no bank alert, and alerts with no row.
 let rules = [];
-let reconcile = { rows_without_event: [], events_without_row: [] };
+let reconcile = { to_match: [], no_alert_found: [], events_without_row: [], settled: {} };
+// Reconcile actions change the transactions underneath without redrawing them:
+// redrawing is what threw you back to the top of the page after every click.
+// The rest of the screen catches up when you leave the tab.
+let pointsDirty = false;
 let filterBasis = '';
 let rulesGrid = null;
-let reconRowsGrid = null;
-let reconEventsGrid = null;
 let activeChartType = 'bar';
 let editingId = null;
 let editingType = null;
@@ -212,7 +221,19 @@ export async function renderPoints(container) {
   await loadData();
 }
 
+/** Where the page is scrolled to, so a redraw can put it back. */
+function scrollState() {
+  const main = document.getElementById('main-content');
+  return { win: window.scrollY, main: main ? main.scrollTop : 0 };
+}
+function restoreScroll(state) {
+  const main = document.getElementById('main-content');
+  window.scrollTo(0, state.win);
+  if (main) main.scrollTop = state.main;
+}
+
 async function loadData() {
+  const place = scrollState();
   // Pick up any spend on the card the ledger has seen since the last visit.
   // Idempotent and cheap; a failure here must not stop the page loading.
   await supabase.rpc('cc_sync_from_events').then(() => {}, () => {});
@@ -237,7 +258,8 @@ async function loadData() {
   redemptions  = rdRes.data || [];
   eurRate = rate;
   rules = rulesRes.data || [];
-  reconcile = reconRes.data || { rows_without_event: [], events_without_row: [] };
+  reconcile = { to_match: [], no_alert_found: [], events_without_row: [], settled: {}, ...(reconRes.data || {}) };
+  pointsDirty = false;
 
   // Update FX badge
   const badge = document.getElementById('fx-rate-badge');
@@ -252,6 +274,8 @@ async function loadData() {
   renderRulesTable();
   renderReconcile();
   renderSyncBanner();
+  // Grid.js renders on the next frame; put the page back after it has.
+  requestAnimationFrame(() => restoreScroll(place));
 }
 
 // ── What the ledger added, and what never paired ───────
@@ -260,7 +284,7 @@ function renderSyncBanner() {
   const el = document.getElementById('pt-sync-banner');
   if (!el) return;
   const assumed = transactions.filter(t => t.basis === 'assumed').length;
-  const loose = reconcile.rows_without_event.length + reconcile.events_without_row.length;
+  const loose = reconcile.to_match.length + reconcile.events_without_row.length;
   if (!assumed && !loose) { el.innerHTML = ''; return; }
 
   const parts = [];
@@ -269,7 +293,7 @@ function renderSyncBanner() {
       <button type="button" class="btn-sm btn-accent" id="pt-show-assumed">${filterBasis === 'assumed' ? 'Show all' : 'Review'}</button>`);
   }
   if (loose) {
-    parts.push(`<span><strong>${reconcile.rows_without_event.length}</strong> typed ${reconcile.rows_without_event.length === 1 ? 'row has' : 'rows have'} no card alert, and
+    parts.push(`<span><strong>${reconcile.to_match.length}</strong> typed ${reconcile.to_match.length === 1 ? 'row looks' : 'rows look'} like a card alert that is waiting, and
       <strong>${reconcile.events_without_row.length}</strong> ${reconcile.events_without_row.length === 1 ? 'alert has' : 'alerts have'} no row.</span>
       <button type="button" class="btn-sm btn-ghost" id="pt-go-reconcile">Reconcile</button>`);
   }
@@ -499,17 +523,21 @@ function renderTableFilters() {
 
 // ── Tables ───────────────────────────────────────────────
 function switchTab(tab) {
+  const leavingReconcile = activeTab === 'reconcile' && tab !== 'reconcile';
   activeTab = tab;
   for (const name of ['transactions', 'redemptions', 'rules', 'reconcile']) {
     document.getElementById(`tab-${name}`).classList.toggle('active', tab === name);
     document.getElementById(`pt-${name}-table`).style.display = tab === name ? '' : 'none';
   }
   renderTableFilters();
+  if (leavingReconcile && pointsDirty) loadData();
 }
 
 function renderTxTable() {
   const container = document.getElementById('pt-transactions-table');
   if (!container) return;
+  // Redrawing must not send you back to page one.
+  const currentPage = Math.max(0, (parseInt(container.querySelector('.gridjs-pages .gridjs-currentPage')?.textContent, 10) || 1) - 1);
   if (txTableGrid) { try { txTableGrid.destroy(); } catch(_) {} }
 
   let filtered = transactions;
@@ -556,7 +584,7 @@ function renderTxTable() {
       { name: 'Actions', sort: false, attributes: ACTIONS_COL },
     ],
     data: rows,
-    pagination: { limit: 10 },
+    pagination: { limit: 10, page: Math.min(currentPage, Math.max(0, Math.ceil(rows.length / 10) - 1)) },
     sort: true,
     language: { noRecordsFound: 'No transactions yet. Add one with the + button!' },
   }).render(container);
@@ -568,8 +596,14 @@ function renderTxTable() {
   window.__ptTxConfirm = async (id) => {
     const { error } = await supabase.rpc('cc_confirm', { p_id: id });
     if (error) { showToast('Could not confirm: ' + error.message, 'error'); return; }
+    // Nothing about the numbers changed, so nothing else needs redrawing.
+    const row = transactions.find(t => t.id === id);
+    if (row) row.basis = 'confirmed';
+    const place = scrollState();
+    renderTxTable();
+    renderSyncBanner();
+    requestAnimationFrame(() => restoreScroll(place));
     showToast('Confirmed.');
-    await loadData();
   };
   window.__ptTxDelete = async (id) => {
     if (!confirm('Delete this transaction?')) return;
@@ -584,7 +618,7 @@ function renderTxTable() {
 function merchantCell(t) {
   const bits = [escapeHTML(t.merchant || '—')];
   if (t.basis === 'assumed') bits.push('<span class="badge badge-yellow" title="Added from a card alert. The label and multiplier are assumed from earlier spends at this merchant.">Assumed</span>');
-  if (t.merchant && t.merchant === settings.get('cc_work_label')) bits.push('<span class="badge badge-blue" title="Counted as work spend">Work</span>');
+  if (t.is_work) bits.push('<span class="badge badge-blue" title="Work spend: kept out of your personal spending">Work</span>');
   const bank = t.raw_merchant && t.raw_merchant !== t.merchant
     ? `<div class="pt-bank-name" title="The merchant name on the card alert">${escapeHTML(t.raw_merchant)}</div>` : '';
   return `<div class="pt-merchant">${bits.join(' ')}</div>${bank}`;
@@ -608,7 +642,6 @@ function renderRulesTable() {
   if (!container) return;
   if (rulesGrid) { try { rulesGrid.destroy(); } catch (_) {} }
 
-  const workLabel = settings.get('cc_work_label');
   const shown = searchTerm
     ? rules.filter(r => r.ledger_merchant?.toLowerCase().includes(searchTerm) || r.label?.toLowerCase().includes(searchTerm))
     : rules;
@@ -624,7 +657,7 @@ function renderRulesTable() {
     ],
     data: shown.map(r => [
       r.ledger_merchant,
-      gridHtml(`${escapeHTML(r.label)}${r.label === workLabel ? ' <span class="badge badge-blue">Work</span>' : ''}`),
+      gridHtml(`${escapeHTML(r.label)}${r.is_work ? ' <span class="badge badge-blue">Work</span>' : ''}`),
       gridHtml(`<span class="badge ${getMultiplierBadgeClass(r.multiplier)}">${escapeHTML(r.multiplier)}×</span>`),
       gridHtml(numCell(String(r.uses))),
       gridHtml(r.source === 'manual'
@@ -662,7 +695,6 @@ function openRuleForm(rule) {
       <div class="form-group">
         <label class="form-label" for="pt-r-label">File it under</label>
         ${comboboxHTML({ id: 'pt-r-label', value: rule.label, placeholder: 'Search or type a new one', options: usedBefore(t => t.merchant) })}
-        <div class="form-hint">Use “${escapeHTML(settings.get('cc_work_label'))}” to count spends here as work.</div>
       </div>
       <div class="form-group">
         <label class="form-label" for="pt-r-multiplier">Multiplier</label>
@@ -670,6 +702,8 @@ function openRuleForm(rule) {
           ${MULTIPLIER_OPTIONS.map(m => `<option value="${m.value}" ${rule.multiplier == m.value ? 'selected' : ''}>${m.label}</option>`).join('')}
         </select>
       </div>
+      <label class="pt-check"><input type="checkbox" id="pt-r-work" ${rule.is_work ? 'checked' : ''} />
+        <span>Spends here are work <span class="pt-check-hint">tick only if nearly all of them are; you can always tick one row</span></span></label>
       <label class="pt-check"><input type="checkbox" id="pt-r-apply" checked />
         <span>Also apply to rows at this merchant that are still assumed</span></label>
     </div>
@@ -684,10 +718,11 @@ function openRuleForm(rule) {
   document.getElementById('pt-rule-submit').addEventListener('click', async () => {
     const label = document.getElementById('pt-r-label').value.trim();
     const multiplier = parseNum(document.getElementById('pt-r-multiplier').value);
+    const isWork = Boolean(document.getElementById('pt-r-work').checked);
     if (!label) { showToast('A rule needs a label.', 'error'); return; }
 
     const { error } = await supabase.from('cc_merchant_rules')
-      .update({ label, multiplier, source: 'manual', ambiguous: false, updated_at: new Date().toISOString() })
+      .update({ label, multiplier, is_work: isWork, source: 'manual', ambiguous: false, updated_at: new Date().toISOString() })
       .eq('merchant_key', rule.merchant_key);
     if (error) { showToast('Save failed: ' + error.message, 'error'); return; }
 
@@ -695,7 +730,7 @@ function openRuleForm(rule) {
       const waiting = transactions.filter(t => t.basis === 'assumed' && t.raw_merchant
         && t.raw_merchant.toLowerCase() === rule.ledger_merchant.toLowerCase());
       for (const t of waiting) {
-        await supabase.from('cc_transactions').update({ merchant: label, multiplier }).eq('id', t.id);
+        await supabase.from('cc_transactions').update({ merchant: label, multiplier, is_work: isWork }).eq('id', t.id);
       }
     }
     closeModal();
@@ -706,64 +741,153 @@ function openRuleForm(rule) {
 
 // ── Reconcile ──────────────────────────────────────────
 //
-// Two lists that should both be short. A typed row with no card alert is fine
-// when the alert never came; it is a problem when the alert is sitting in the
-// other list under a different amount. Linking keeps your label, multiplier and
-// points, and takes the amount and date from the bank.
+// Three short lists, each a different kind of decision, and every decision is
+// remembered (0013_card_reconcile.sql) so a list can actually be emptied:
+//
+//   to match        a typed row that looks like a waiting card alert. Link it, or
+//                   say it is not a match.
+//   alerts, no row  a spend the ledger saw that was never entered. Add it, or
+//                   ignore it (it earned nothing, or it is already inside a row
+//                   that pools several spends).
+//   nothing found   typed rows with no plausible alert. Nothing to do; collapsed,
+//                   and acknowledged in one click.
+//
+// Plain DOM rather than Grid.js, on purpose: an action removes its own row and
+// nothing else moves — no refetch, no redraw, no jump back to the top.
 
 function renderReconcile() {
   const container = document.getElementById('pt-reconcile-table');
   if (!container) return;
-  for (const g of [reconRowsGrid, reconEventsGrid]) { if (g) { try { g.destroy(); } catch (_) {} } }
+  const money = v => escapeHTML(formatINRFull(parseNum(v)));
 
+  const matchRows = reconcile.to_match.map(r => `
+    <div class="pt-rc-row" data-row="${escapeHTML(r.id)}">
+      <div class="pt-rc-what">
+        <div class="pt-rc-title">${escapeHTML(r.label)} <span class="pt-rc-amount">${money(r.amount)}</span></div>
+        <div class="pt-bank-name">${escapeHTML(formatDate(r.date))} · typed by you · ${escapeHTML(r.multiplier)}×</div>
+      </div>
+      <div class="pt-rc-arrow" aria-hidden="true"><i class="fas fa-arrow-right"></i></div>
+      <div class="pt-rc-pick">
+        <select class="form-select pt-rc-select" aria-label="Card alert to link to">
+          ${r.candidates.map(c => `<option value="${escapeHTML(c.event_id)}">${escapeHTML(formatDate(c.date))} · ${escapeHTML(c.merchant || 'unnamed')} · ${money(c.amount)} · ${escapeHTML(c.why)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="pt-rc-actions">
+        <button type="button" class="btn-sm btn-accent" ${callAttrs(`window.__ptLink('${r.id}')`)}>Link</button>
+        <button type="button" class="btn-sm btn-ghost" ${callAttrs(`window.__ptNoMatch('${r.id}')`)} title="None of these is this row. Stop suggesting.">Not a match</button>
+      </div>
+    </div>`).join('');
+
+  const eventRows = reconcile.events_without_row.map(e => `
+    <div class="pt-rc-row" data-event="${escapeHTML(e.event_id)}">
+      <div class="pt-rc-what">
+        <div class="pt-rc-title">${escapeHTML(e.merchant || e.title || 'unnamed')} <span class="pt-rc-amount">${money(e.amount)}</span></div>
+        <div class="pt-bank-name">${escapeHTML(formatDate(e.date))} · would be filed under ${escapeHTML(e.would_be_label || 'its own name')}</div>
+      </div>
+      <div class="pt-rc-actions">
+        <button type="button" class="btn-sm btn-accent" ${callAttrs(`window.__ptCreate('${e.event_id}')`)}>Add row</button>
+        <button type="button" class="btn-sm btn-ghost" ${callAttrs(`window.__ptIgnore('${e.event_id}')`)} title="Needs no row: it earned nothing, or it is already part of a row that pools several spends.">Ignore</button>
+      </div>
+    </div>`).join('');
+
+  const fineRows = reconcile.no_alert_found.map(r => `
+    <div class="pt-rc-row pt-rc-row--quiet" data-row="${escapeHTML(r.id)}">
+      <div class="pt-rc-what">
+        <div class="pt-rc-title">${escapeHTML(r.label)} <span class="pt-rc-amount">${money(r.amount)}</span></div>
+        <div class="pt-bank-name">${escapeHTML(formatDate(r.date))}</div>
+      </div>
+    </div>`).join('');
+
+  const settled = reconcile.settled || {};
   container.innerHTML = `
-    <div class="pt-recon-head">Typed rows with no card alert <span class="pt-recon-count">${reconcile.rows_without_event.length}</span></div>
-    <p class="pt-recon-note">If a likely alert exists it is suggested. Link it and the bank's amount and date take over; your label, multiplier and points stay. With no suggestion, the alert probably never arrived and the row is fine as it is.</p>
-    <div id="pt-recon-rows"></div>
-    <div class="pt-recon-head">Card alerts with no row <span class="pt-recon-count">${reconcile.events_without_row.length}</span></div>
-    <p class="pt-recon-note">Spends the ledger saw on this card before automatic rows began. Add a row for any that earned points and was never entered.</p>
-    <div id="pt-recon-events"></div>`;
+    <section class="pt-rc-section">
+      <div class="pt-recon-head">Looks like a waiting card alert <span class="pt-recon-count" id="pt-rc-n-match">${reconcile.to_match.length}</span></div>
+      <p class="pt-recon-note">You typed these, and a card alert nearby has the same label or a close amount. Linking keeps your label, multiplier and points and takes the amount and date from the bank. Pick a different alert from the list if the first guess is wrong.</p>
+      <div class="pt-rc-list" id="pt-rc-match">${matchRows || '<p class="hl-empty">Nothing left to match.</p>'}</div>
+    </section>
 
-  reconRowsGrid = new Grid({
-    columns: [{ name: 'Date' }, { name: 'Label' }, { name: 'Amount', attributes: NUMERIC_COL }, { name: 'Likely card alert' }, { id: 'act', name: '', sort: false, attributes: ACTIONS_COL }],
-    data: reconcile.rows_without_event.map(r => [
-      formatDate(r.date), r.label, gridHtml(numCell(formatINRFull(parseNum(r.amount)), { bold: true })),
-      r.suggestion
-        ? gridHtml(`${escapeHTML(formatDate(r.suggestion.date))} · ${escapeHTML(r.suggestion.merchant || 'unnamed')} · <strong>${escapeHTML(formatINRFull(parseNum(r.suggestion.amount)))}</strong>
-            <div class="pt-bank-name">${escapeHTML(r.suggestion.why)}</div>`)
-        : gridHtml('<span class="pt-bank-name">None found</span>'),
-      r.suggestion
-        ? gridHtml(`<button type="button" class="btn-sm btn-accent" ${callAttrs(`window.__ptLink('${r.id}','${r.suggestion.event_id}')`)}>Link</button>`)
-        : '',
-    ]),
-    pagination: { limit: 8 }, sort: true,
-    language: { noRecordsFound: 'Every typed row is linked to a card alert.' },
-  }).render(document.getElementById('pt-recon-rows'));
+    <section class="pt-rc-section">
+      <div class="pt-recon-head">Card alerts with no row <span class="pt-recon-count" id="pt-rc-n-events">${reconcile.events_without_row.length}</span></div>
+      <p class="pt-recon-note">Spends on the card from before rows were created automatically. Add the ones you never entered. Ignore one that is already inside a row of yours that pools several spends, or it will be counted twice.</p>
+      <div class="pt-rc-list" id="pt-rc-events">${eventRows || '<p class="hl-empty">Every spend on the card has a row.</p>'}</div>
+    </section>
 
-  reconEventsGrid = new Grid({
-    columns: [{ name: 'Date' }, { name: 'On the card alert' }, { name: 'Amount', attributes: NUMERIC_COL }, { name: 'Would be filed under' }, { id: 'act', name: '', sort: false, attributes: ACTIONS_COL }],
-    data: reconcile.events_without_row.map(e => [
-      formatDate(e.date), e.merchant || e.title || 'unnamed',
-      gridHtml(numCell(formatINRFull(parseNum(e.amount)), { bold: true })),
-      e.would_be_label || '—',
-      gridHtml(`<button type="button" class="btn-sm btn-ghost" ${callAttrs(`window.__ptCreate('${e.event_id}')`)}>Add row</button>`),
-    ]),
-    pagination: { limit: 8 }, sort: true,
-    language: { noRecordsFound: 'Every spend on the card has a row.' },
-  }).render(document.getElementById('pt-recon-events'));
+    <details class="pt-rc-section pt-rc-details" ${reconcile.no_alert_found.length ? '' : 'hidden'}>
+      <summary class="pt-recon-head">No card alert found <span class="pt-recon-count" id="pt-rc-n-fine">${reconcile.no_alert_found.length}</span></summary>
+      <p class="pt-recon-note">Rows you typed for which the ledger has no alert at all, usually because the email never came. They are fine as they are and need nothing from you.
+        <button type="button" class="btn-sm btn-ghost" id="pt-rc-all-fine">Mark all as fine</button></p>
+      <div class="pt-rc-list" id="pt-rc-fine">${fineRows}</div>
+    </details>
 
-  window.__ptLink = async (id, eventId) => {
+    <p class="pt-recon-note pt-rc-settled">${(settled.rows_marked_fine || 0) + (settled.alerts_ignored || 0)
+      ? `Already settled: ${settled.rows_marked_fine || 0} typed rows marked fine, ${settled.alerts_ignored || 0} alerts ignored.` : ''}</p>`;
+
+  /** Take one row out of the page, and nothing else. */
+  const removeRow = (selector, counterId, listKey, match) => {
+    container.querySelector(selector)?.remove();
+    reconcile[listKey] = reconcile[listKey].filter(item => !match(item));
+    const counter = document.getElementById(counterId);
+    if (counter) counter.textContent = String(reconcile[listKey].length);
+    pointsDirty = true;
+    renderSyncBanner();
+  };
+  /** An alert that has been used cannot be offered to another row. */
+  const dropCandidate = (eventId) => {
+    for (const row of [...reconcile.to_match]) {
+      row.candidates = row.candidates.filter(c => c.event_id !== eventId);
+      const el = container.querySelector(`[data-row="${CSS.escape(row.id)}"]`);
+      el?.querySelector(`option[value="${CSS.escape(eventId)}"]`)?.remove();
+      if (!row.candidates.length) removeRow(`[data-row="${CSS.escape(row.id)}"]`, 'pt-rc-n-match', 'to_match', r => r.id === row.id);
+    }
+  };
+  const busy = (el, on) => el?.querySelectorAll('button, select').forEach(b => { b.disabled = on; });
+
+  window.__ptLink = async (id) => {
+    const el = container.querySelector(`[data-row="${CSS.escape(id)}"]`);
+    const eventId = el?.querySelector('.pt-rc-select')?.value;
+    if (!eventId) return;
+    busy(el, true);
     const { error } = await supabase.rpc('cc_link', { p_id: id, p_event_id: eventId });
-    if (error) { showToast('Could not link: ' + error.message, 'error'); return; }
+    if (error) { busy(el, false); showToast('Could not link: ' + error.message, 'error'); return; }
+    removeRow(`[data-row="${CSS.escape(id)}"]`, 'pt-rc-n-match', 'to_match', r => r.id === id);
+    removeRow(`[data-event="${CSS.escape(eventId)}"]`, 'pt-rc-n-events', 'events_without_row', e => e.event_id === eventId);
+    dropCandidate(eventId);
     showToast('Linked. The bank\'s amount and date now apply.');
-    await loadData();
+  };
+  window.__ptNoMatch = async (id) => {
+    const el = container.querySelector(`[data-row="${CSS.escape(id)}"]`);
+    busy(el, true);
+    const { error } = await supabase.rpc('cc_mark_no_alert', { p_ids: [id] });
+    if (error) { busy(el, false); showToast('Could not save: ' + error.message, 'error'); return; }
+    removeRow(`[data-row="${CSS.escape(id)}"]`, 'pt-rc-n-match', 'to_match', r => r.id === id);
   };
   window.__ptCreate = async (eventId) => {
+    const el = container.querySelector(`[data-event="${CSS.escape(eventId)}"]`);
+    busy(el, true);
     const { error } = await supabase.rpc('cc_create_from_event', { p_event_id: eventId });
-    if (error) { showToast('Could not add: ' + error.message, 'error'); return; }
+    if (error) { busy(el, false); showToast('Could not add: ' + error.message, 'error'); return; }
+    removeRow(`[data-event="${CSS.escape(eventId)}"]`, 'pt-rc-n-events', 'events_without_row', e => e.event_id === eventId);
+    dropCandidate(eventId);
     showToast('Row added as assumed. Confirm it in Transactions.');
-    await loadData();
   };
+  window.__ptIgnore = async (eventId) => {
+    const el = container.querySelector(`[data-event="${CSS.escape(eventId)}"]`);
+    busy(el, true);
+    const { error } = await supabase.rpc('cc_ignore_events', { p_event_ids: [eventId] });
+    if (error) { busy(el, false); showToast('Could not save: ' + error.message, 'error'); return; }
+    removeRow(`[data-event="${CSS.escape(eventId)}"]`, 'pt-rc-n-events', 'events_without_row', e => e.event_id === eventId);
+    dropCandidate(eventId);
+  };
+  document.getElementById('pt-rc-all-fine')?.addEventListener('click', async (event) => {
+    const ids = reconcile.no_alert_found.map(r => r.id);
+    if (!ids.length) return;
+    event.target.disabled = true;
+    const { error } = await supabase.rpc('cc_mark_no_alert', { p_ids: ids });
+    if (error) { event.target.disabled = false; showToast('Could not save: ' + error.message, 'error'); return; }
+    reconcile.no_alert_found = [];
+    container.querySelector('.pt-rc-details')?.setAttribute('hidden', '');
+    showToast(`${ids.length} rows marked as fine.`);
+  });
 }
 
 function renderRdTable() {
@@ -870,7 +994,7 @@ function openForm(data, type) {
       ${comboboxHTML({
         id: 'pt-f-desc',
         value: data?.description || '',
-        placeholder: 'Search or type a new one',
+        placeholder: NOTE_PLACEHOLDER,
         options: usedBefore(t => t.description),
       })}
     </div>
@@ -886,9 +1010,11 @@ function openForm(data, type) {
         <div class="form-hint">Leave blank to auto-calculate</div>
       </div>
     </div>
+    <label class="pt-check"><input type="checkbox" id="pt-f-work" ${data?.is_work ? 'checked' : ''} />
+      <span>Work spend <span class="pt-check-hint">kept out of personal spending, whoever was paid</span></span></label>
     ${data?.event_id && data?.raw_merchant ? `
       <label class="pt-check"><input type="checkbox" id="pt-f-remember" ${data.basis === 'assumed' ? 'checked' : ''} />
-        <span>Remember this label and multiplier for <strong>${escapeHTML(data.raw_merchant)}</strong></span></label>` : ''}
+        <span>Remember this label, multiplier and work setting for <strong>${escapeHTML(data.raw_merchant)}</strong></span></label>` : ''}
     <!-- Preview -->
     <div style="background:var(--bg-elevated);border-radius:var(--radius-md);padding:0.85rem 1rem;border:1px solid var(--border);font-size:0.85rem">
       <span style="color:var(--text-muted)">Auto-calculated points: </span>
@@ -1062,6 +1188,7 @@ async function submitForm() {
       amount:      parseNum(document.getElementById('pt-f-amount')?.value),
       multiplier:  parseNum(document.getElementById('pt-f-multiplier')?.value),
       points:      ptsOverride !== '' && ptsOverride !== undefined ? parseNum(ptsOverride) : null,
+      is_work:     Boolean(document.getElementById('pt-f-work')?.checked),
       user_id:     await getCurrentUserId(),
     };
 
@@ -1080,6 +1207,7 @@ async function submitForm() {
         p_id: editingId, p_label: payload.merchant, p_multiplier: payload.multiplier,
         p_points: payload.points, p_remember: Boolean(document.getElementById('pt-f-remember')?.checked),
         p_description: payload.description ?? '',
+        p_is_work: payload.is_work,
       }));
       // cc_confirm keeps an existing points override when given null, so
       // clearing the override has to be said separately.

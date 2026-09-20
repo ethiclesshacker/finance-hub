@@ -939,7 +939,7 @@ export const TOOLS = {
     description: 'Everything about a day, or each day in a range, in one object: money spent and received, calories and protein '
       + 'eaten, steps, sleep, heart, weight, calories burned, the energy balance against the calorie target, and workouts. '
       + 'START HERE for "how was my day", "how was my week", "am I in a deficit", or anything that crosses money, food and body. '
-      + 'money.spend is everything; when part of it was work (card spends he files under his employer, reimbursable) the day '
+      + 'money.spend is everything; when part of it was work (card spends he has marked as work, reimbursable) the day '
       + 'also carries money.work_spend and money.personal_spend — judge his spending on personal_spend, and mention work separately. '
       + 'energy.balance_kcal is eaten minus burned (negative is a deficit). Eaten comes from receipts and what he told you, so '
       + 'it is a floor: when energy.complete is false say the balance is provisional. That happens for today, when '
@@ -969,7 +969,7 @@ export const TOOLS = {
       + 'lifetime; date_range only scopes the period figures. For what was bought, use search_events — this is the points view. '
       + 'Rows are now created automatically from card alerts: `assumed` counts rows whose label and multiplier were inferred from '
       + 'earlier spends at the same merchant and that he has not confirmed yet, so say the balance includes that many assumed points. '
-      + 'range.work_spend is the part of the period spend filed under his work label.',
+      + 'range.work_spend is the part of the period spend he has marked as work. top_merchants are real merchants now, work or not.',
     parameters: { type: 'object', properties: { date_range: DATE_RANGE } },
     handler: async (args) => {
       const range = args.date_range ? resolveDays(args.date_range) : { from: null, to: null };

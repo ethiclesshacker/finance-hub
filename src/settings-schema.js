@@ -105,16 +105,12 @@ export const SETTINGS_SCHEMA = {
     label: 'Reward rate target', suffix: '%', hint: 'Value returned as a percentage of spend.',
   },
   // Rows on the Points page are created from the ledger's card alerts
-  // (0012_card_points.sql). These two say which card, and which label means work.
+  // (0012_card_points.sql). This says which card. Work spend is a tick-box on
+  // the row and on the merchant rule (0014), not a label, so it has no setting.
   cc_points_account: {
     type: 'string', default: '', group: 'Credit card',
     label: 'Points card, last four digits',
     hint: 'Only card alerts for this account create rows on the Points page. Every other card is ignored. Leave empty to switch automatic rows off.',
-  },
-  cc_work_label: {
-    type: 'string', default: 'Work', group: 'Credit card',
-    label: 'Work-spend label',
-    hint: 'Rows filed under this label count as work spend, and are split out of your personal spending.',
   },
 
   // ── Food ──────────────────────────────────────────────
