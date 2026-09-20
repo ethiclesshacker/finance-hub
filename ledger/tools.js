@@ -119,6 +119,21 @@ function lastMonth(today) {
   return [start.toISOString().slice(0, 10), end.toISOString().slice(0, 10)];
 }
 
+/**
+ * A date expression → inclusive local calendar dates.
+ *
+ * The health functions take dates, not instants: a "day" of steps is a local
+ * day, and the database buckets by the zone the phone was in when it synced.
+ */
+export function resolveDays(range, fallback = 'last 7 days', timeZone = config.timeZone) {
+  const { from, to } = resolveRange(range || fallback, timeZone);
+  // `to` is the exclusive midnight after the last day; step back inside it.
+  return {
+    from: localDateISO(new Date(from), timeZone),
+    to: localDateISO(new Date(new Date(to).getTime() - 1), timeZone),
+  };
+}
+
 // ── The tools ──────────────────────────────────────────
 
 const DATE_RANGE = {
@@ -907,6 +922,86 @@ export const TOOLS = {
       const { from, to } = resolveRange(args.date_range);
       return rpc('ledger_stats', { p_from: from, p_to: to, p_user_id: await resolveUserId() });
     },
+  },
+
+  // ── Apple Health ─────────────────────────────────────
+  //
+  // The phone syncs raw HealthKit samples — a row every minute or two, per
+  // device, ~1,300 a day. None of these tools return samples. They return days
+  // (or hours, or nights), already deduplicated across iPhone and Watch in SQL.
+
+  get_health_overview: {
+    description: 'Apple Health, one row per day: steps, active and resting calories burned, distance, exercise minutes, '
+      + 'sleep hours with bed and wake times, resting heart rate, heart rate min/avg/max, HRV, weight, workouts. '
+      + 'START HERE for any question about activity, sleep, fitness, heart or weight. Days with no data still appear, as just a date.',
+    parameters: { type: 'object', properties: { date_range: { ...DATE_RANGE, default: 'last 7 days' } } },
+    handler: async (args) => {
+      const { from, to } = resolveDays(args.date_range);
+      return rpc('health_overview', { p_from: from, p_to: to, p_user_id: await resolveUserId() });
+    },
+  },
+
+  get_health_metric: {
+    description: 'One Apple Health metric across days, for anything the overview does not carry or when only one number is wanted. '
+      + 'Totals per day for cumulative types (step_count, active_energy, water, dietary_*); min/avg/max/latest per day for readings '
+      + '(heart_rate, hrv_sdnn, body_mass, oxygen_saturation). Call list_health_metrics for the exact type names that have data.',
+    parameters: {
+      type: 'object', required: ['type'],
+      properties: {
+        type: { type: 'string', description: 'HealthKit type in snake_case, e.g. step_count, heart_rate, body_mass.' },
+        date_range: { ...DATE_RANGE, default: 'last 7 days' },
+      },
+    },
+    handler: async (args) => {
+      const { from, to } = resolveDays(args.date_range);
+      return rpc('health_series', { p_type: args.type, p_from: from, p_to: to, p_user_id: await resolveUserId() });
+    },
+  },
+
+  get_health_day_detail: {
+    description: 'One Apple Health metric across the hours of a single day — when were the steps walked, what did heart rate do overnight. '
+      + 'Buckets for a cumulative type add up to that day\'s total.',
+    parameters: {
+      type: 'object', required: ['type'],
+      properties: {
+        type: { type: 'string' },
+        date: { type: 'string', description: 'YYYY-MM-DD, today or yesterday. Defaults to today.' },
+        bucket_minutes: { type: 'integer', default: 60, description: '5 to 360.' },
+      },
+    },
+    handler: async (args) => {
+      const { from } = resolveDays(args.date, 'today');
+      return rpc('health_intraday', {
+        p_type: args.type, p_day: from, p_bucket_minutes: args.bucket_minutes ?? 60, p_user_id: await resolveUserId(),
+      });
+    },
+  },
+
+  get_sleep: {
+    description: 'Sleep per night with stages: hours asleep, fell-asleep and wake times, minutes of core, deep, REM and awake, time in bed. '
+      + 'A night is dated by the morning it ended. Overlapping records are merged, and time in bed is not counted as sleep.',
+    parameters: { type: 'object', properties: { date_range: { ...DATE_RANGE, default: 'last 7 days' } } },
+    handler: async (args) => {
+      const { from, to } = resolveDays(args.date_range);
+      return rpc('health_sleep', { p_from: from, p_to: to, p_user_id: await resolveUserId() });
+    },
+  },
+
+  get_workouts: {
+    description: 'Workouts recorded by Apple Watch or fitness apps: activity, start, minutes, active calories, distance. '
+      + 'Distinct from log_activity, which records what the user tells you; these were measured.',
+    parameters: { type: 'object', properties: { date_range: { ...DATE_RANGE, default: 'last 30 days' } } },
+    handler: async (args) => {
+      const { from, to } = resolveDays(args.date_range, 'last 30 days');
+      return rpc('health_workouts', { p_from: from, p_to: to, p_user_id: await resolveUserId() });
+    },
+  },
+
+  list_health_metrics: {
+    description: 'Which Apple Health types have been synced, with row counts, date span, and when the phone last synced. '
+      + 'Use it to tell "no data that day" from "that metric is not being synced", and to find exact type names.',
+    parameters: { type: 'object', properties: {} },
+    handler: async () => rpc('health_catalog', { p_user_id: await resolveUserId() }),
   },
 
   get_review_queue: {

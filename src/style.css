@@ -3604,3 +3604,86 @@ input, select, textarea {
   .dd-table { min-width: 48rem; }
   .dd-actions .btn-icon { opacity: 1; }
 }
+
+/* ============================================================
+   HEALTH
+   Two charts to a row, because each carries exactly one axis: steps and heart
+   rate sit side by side rather than sharing a plot with two scales.
+   ============================================================ */
+.hl-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-4);
+}
+@media (max-width: 1080px) { .hl-grid { grid-template-columns: minmax(0, 1fr); } }
+
+.hl-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+.hl-legend-item { display: inline-flex; align-items: center; gap: var(--sp-1); }
+.hl-swatch { width: 0.625rem; height: 0.625rem; border-radius: 2px; }
+
+/* Bars in the steps chart select a day. */
+#hl-steps { cursor: pointer; }
+
+.hl-list { max-height: 15rem; overflow-y: auto; }
+.hl-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+.hl-row:last-child { border-bottom: 0; }
+.hl-row-main { min-width: 0; }
+.hl-row-title { font-size: var(--fs-base); font-weight: 600; color: var(--text-primary); }
+.hl-row-sub { font-size: var(--fs-xs); color: var(--text-muted); }
+.hl-row-stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+.hl-empty { font-size: var(--fs-sm); color: var(--text-muted); }
+
+.hl-table-card > summary {
+  cursor: pointer;
+  list-style-position: inside;
+  /* A tap target, not just a line of text. line-height keeps the disclosure
+     marker, which display:flex would remove. */
+  min-height: var(--control-h);
+  line-height: var(--control-h);
+}
+.hl-table-card[open] > summary { margin-bottom: var(--sp-4); }
+/* The table may be wider than a phone; the page must not be. */
+.hl-table-wrap { overflow-x: auto; }
+.hl-table {
+  width: 100%;
+  min-width: 44rem;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+.hl-table th,
+.hl-table td {
+  padding: var(--sp-2) var(--sp-3);
+  text-align: right;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.hl-table thead th {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.hl-table th:first-child,
+.hl-table td:first-child { text-align: left; }
+.hl-table tbody th { font-weight: 600; color: var(--text-primary); }
