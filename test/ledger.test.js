@@ -358,6 +358,138 @@ test('quick add extracts people only from a "who" verb', () => {
   assert.ok(event.entities.some(e => e.type === 'person' && e.name === 'Rahul'));
 });
 
+test('quick add reads a gift as a thing from a person, on the weekday named', () => {
+  // A Sunday. "Wednesday" is the one four days ago, not next week's.
+  const now = new Date('2026-09-06T05:00:00Z');
+  const { event, parsed } = parseQuickEntry('Received Instax camera as a gift from Akansha on Wednesday evening',
+                                            { now, timeZone: 'Asia/Kolkata' });
+  assert.equal(event.type, 'gift');
+  assert.equal(event.subtype, 'received');
+  assert.equal(event.title, 'Instax camera from Akansha');
+  assert.equal(event.data.item, 'Instax camera');
+  assert.equal(event.data.merchant, undefined);                   // Akansha is not a shop
+  assert.equal(event.occurred_at, '2026-09-02T13:30:00.000Z');    // Wed 19:00 IST
+  assert.ok(event.entities.some(e => e.type === 'person' && e.name === 'Akansha' && e.relationship === 'sender'));
+  assert.equal(parsed.place, null);
+  assert.match(event.inference.assumed_date, /Wednesday/);
+
+  const given = parseQuickEntry('Gave Rahul a book for his birthday last Friday', { now });
+  assert.equal(given.event.subtype, 'given');
+  assert.equal(given.event.title, 'Book to Rahul');
+  assert.match(given.event.occurred_at, /^2026-09-04/);
+  assert.equal(given.event.inference.assumed_date, undefined);    // "last Friday" is not a guess
+
+  // Money arriving is not a gift.
+  const refund = parseQuickEntry('Received a refund from HDFC', { now }).event;
+  assert.equal(refund.type, 'transfer');
+  assert.equal(refund.subtype, 'refund');
+});
+
+test('quick add reads money moving between people, and bills, as what they are', () => {
+  const now = new Date('2026-09-06T05:00:00Z');
+  const paid = parseQuickEntry('Paid Rahul 2000 for dinner', { now }).event;
+  assert.equal(paid.type, 'transfer');
+  assert.equal(paid.subtype, 'payment');
+  assert.equal(paid.data.direction, 'debit');
+  assert.equal(paid.data.to, 'Rahul');
+  assert.equal(paid.data.amount, 2000);
+  assert.equal(isInflow(paid), false);                            // spent, whatever it settled
+
+  const got = parseQuickEntry('Got 5k from Dad', { now }).event;
+  assert.equal(got.type, 'transfer');
+  assert.equal(got.data.direction, 'credit');
+  assert.equal(got.data.from, 'Dad');
+  assert.equal(got.data.amount, 5000);
+  assert.equal(isInflow(got), true);
+
+  const rent = parseQuickEntry('Paid rent 25000', { now }).event;
+  assert.equal(rent.type, 'purchase');
+  assert.equal(rent.subtype, 'bill');
+  assert.equal(rent.title, 'Rent paid');
+
+  const refund = parseQuickEntry('Received a refund from Amazon ₹1,299', { now }).event;
+  assert.equal(refund.title, 'Refund from Amazon');
+  assert.equal(refund.data.merchant, 'Amazon');
+  assert.equal(refund.data.place, undefined);
+});
+
+test('quick add reads people from "with", in lists and in lowercase family words', () => {
+  const now = new Date('2026-09-06T05:00:00Z');
+  const { event } = parseQuickEntry('Dinner with Rahul and Priya at Toit last night 2.4k', { now });
+  assert.deepEqual(event.entities.filter(e => e.type === 'person').map(e => e.name), ['Rahul', 'Priya']);
+  assert.equal(event.data.restaurant, 'Toit');
+  assert.equal(event.data.amount, 2400);
+  assert.equal(event.title, 'Dinner at Toit with Rahul and Priya');
+
+  const mom = parseQuickEntry('Called mom', { now }).event;
+  assert.equal(mom.type, 'communication');
+  assert.ok(mom.entities.some(e => e.type === 'person' && e.name === 'Mom'));
+
+  // "yesterday" is not a surname.
+  const coffee = parseQuickEntry('Coffee with Rahul yesterday 240', { now }).event;
+  assert.deepEqual(coffee.entities.map(e => e.name), ['Rahul']);
+});
+
+test('quick add tells a plan from a record', () => {
+  const now = new Date('2026-09-06T05:00:00Z');   // Sunday 10:30 IST
+  assert.equal(parseQuickEntry('Dinner at Nagarjuna next Tuesday', { now }).event.status, 'scheduled');
+  assert.equal(parseQuickEntry('Call with Ankit at 4', { now }).event.status, 'scheduled');
+  assert.equal(parseQuickEntry('Need to call the plumber tomorrow', { now }).event.type, 'task');
+  // No verb and money spent: a record, however early in the day it was typed.
+  assert.equal(parseQuickEntry('Groceries from BigBasket 2300', { now }).event.status, 'confirmed');
+  assert.equal(parseQuickEntry('Haircut at Truefitt 800', { now }).event.status, 'confirmed');
+  // Past tense at an hour still to come: it was yesterday.
+  const pills = parseQuickEntry('Took paracetamol at 11pm', { now }).event;
+  assert.match(pills.occurred_at, /^2026-09-05T17:30/);
+  assert.match(pills.inference.assumed_date, /yesterday/);
+});
+
+test('quick add reads a trip end to end, and a home as a place without an entity', () => {
+  const now = new Date('2026-09-06T05:00:00Z');
+  const flight = parseQuickEntry('Flight from Bangalore to Delhi at 6am on 3 Sept', { now }).event;
+  assert.equal(flight.data.origin, 'Bangalore');
+  assert.equal(flight.data.destination, 'Delhi');
+  assert.equal(flight.title, 'Flight from Bangalore to Delhi');
+  assert.equal(flight.occurred_at, '2026-09-03T00:30:00.000Z');     // 06:00 IST, this year
+  assert.deepEqual(Object.keys(flight.inference), []);
+
+  const cab = parseQuickEntry('Cab to airport ₹640 tonight', { now }).event;
+  assert.equal(cab.subtype, 'cab');                                  // "airport" is where, not a flight
+  assert.equal(cab.title, 'Cab to Airport');
+
+  const ravi = parseQuickEntry("Went to Ravi's place for dinner", { now }).event;
+  assert.equal(ravi.type, 'food');
+  assert.equal(ravi.data.restaurant, undefined);
+  assert.equal(ravi.data.place, "Ravi's place");
+  assert.ok(ravi.entities.some(e => e.type === 'person' && e.name === 'Ravi'));
+
+  const home = parseQuickEntry('Dinner at home - rajma chawal', { now }).event;
+  assert.deepEqual(home.data.items, [{ name: 'Rajma Chawal', qty: 1 }]);
+  assert.equal(home.entities.length, 0);
+});
+
+test('quick add titles read as what was said, minus the when and the price', () => {
+  const now = new Date('2026-09-06T05:00:00Z');
+  const t = (s) => parseQuickEntry(s, { now }).event.title;
+  assert.equal(t('Met Priya at Blue Tokai on Thursday morning'), 'Met Priya at Blue Tokai');
+  assert.equal(t('Watched Dune at PVR with Rahul ₹600'), 'Dune at PVR with Rahul');
+  assert.equal(t('Bought a keyboard from Amazon for ₹4,999 yesterday'), 'Keyboard from Amazon');
+  assert.equal(t('Had 2 dosas and a filter coffee at MTR this morning 180'), '2× Dosas, Filter Coffee at MTR');
+  assert.equal(t('Renewed Netflix 649'), 'Renewed Netflix');
+  assert.equal(t('Fever since last night'), 'Fever');
+  assert.equal(t('Ordered pizza from Dominos 650'), "Pizza from Domino's");
+});
+
+test('quick add stops a place at the day and time that follow it', () => {
+  const now = new Date('2026-09-06T05:00:00Z');
+  const { event } = parseQuickEntry('Met Priya at Blue Tokai on Thursday morning', { now });
+  assert.equal(event.data.place, 'Blue Tokai');
+  assert.equal(event.occurred_at, '2026-09-03T03:30:00.000Z');    // Thu 09:00 IST
+
+  const next = parseQuickEntry('Dinner at Nagarjuna next Tuesday', { now });
+  assert.match(next.event.occurred_at, /^2026-09-08/);
+});
+
 // ── Summaries ──────────────────────────────────────────
 
 test('a digest counts spending without counting money coming in', () => {

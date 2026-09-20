@@ -22,7 +22,10 @@ import { typeMeta } from './taxonomy.js';
  * flattering direction.
  */
 export function isInflow(event) {
-  return event?.type === 'transfer' || event?.data?.direction === 'credit';
+  // A transfer stays out of spend — a self-transfer is neither — except money
+  // paid out to a person: "paid Rahul ₹2,000" was spent, whatever it settled.
+  if (event?.type === 'transfer') return !(event?.subtype === 'payment' && event?.data?.direction === 'debit');
+  return event?.data?.direction === 'credit';
 }
 
 /**

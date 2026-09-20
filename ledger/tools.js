@@ -215,7 +215,7 @@ export const TOOLS = {
           description: event.description ?? null,
           data: event.data || {},
           inference: event.inference || {},
-          status: 'confirmed',
+          status: event.status === 'scheduled' ? 'scheduled' : 'confirmed',
         },
         p_entities: entities,
         p_source_type: 'hermes',

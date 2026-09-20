@@ -32,6 +32,10 @@ export const EVENT_TYPES = [
   // card bill being paid. Separate from `purchase` so that every "what did I
   // spend" answer is correct without having to remember to exclude them.
   { id: 'transfer',      label: 'Transfer',      icon: 'fa-right-left',      color: '#10b981' },
+  // Something given or received without money changing hands on your side.
+  // Not a purchase: a camera someone gave you must never appear in "what did I
+  // spend", and not a note either — it names a thing and a person.
+  { id: 'gift',          label: 'Gift',          icon: 'fa-gift',            color: '#f472b6' },
   { id: 'other',         label: 'Other',         icon: 'fa-circle-dot',      color: '#94a3b8' },
 ];
 
@@ -59,6 +63,7 @@ export const SUBTYPES = {
   milestone:     ['personal', 'work', 'financial'],
   location:      ['visit', 'checkin'],
   transfer:      ['refund', 'credit', 'salary', 'card_payment', 'self_transfer', 'cashback'],
+  gift:          ['received', 'given'],
 };
 
 // The four states an event can be in, plus `scheduled` for things that are on

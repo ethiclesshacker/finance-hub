@@ -842,6 +842,7 @@ function openQuickAdd() {
         ${info.amount ? `<span>${escapeHTML(formatINRFull(info.amount))}</span>` : ''}
         ${info.place ? `<span>${escapeHTML(info.place)}</span>` : ''}
         ${info.people?.length ? `<span>${escapeHTML(info.people.join(', '))}</span>` : ''}
+        ${event.status === 'scheduled' ? `<span class="badge badge-purple">Scheduled</span>` : ''}
       </div>
       ${info.assumed.length ? `<div class="lg-preview-assumed">
         Assumed: ${escapeHTML(info.assumed.map(a => a.replace('assumed_', '')).join(', '))} — adjust below if wrong.
@@ -878,15 +879,20 @@ function openQuickAdd() {
     if (amountInput !== '') { data.amount = Number(amountInput); data.currency = data.currency || 'INR'; }
     else delete data.amount;
 
+    const type = document.getElementById('lg-add-type').value || parsed.event.type;
+    const occurredAt = whenInput ? new Date(whenInput).toISOString() : parsed.event.occurred_at;
     const event = {
-      occurred_at: whenInput ? new Date(whenInput).toISOString() : parsed.event.occurred_at,
-      type: document.getElementById('lg-add-type').value || parsed.event.type,
-      subtype: parsed.event.subtype,
+      occurred_at: occurredAt,
+      type,
+      // A subtype belongs to the type the parser chose; changing the type
+      // in the form makes the old subtype a lie.
+      subtype: type === parsed.event.type ? parsed.event.subtype : null,
       title: document.getElementById('lg-add-title').value.trim() || parsed.event.title,
       description: text || null,
       data,
       inference: parsed.event.inference,
-      status: 'confirmed',
+      // "Dinner with Rahul tomorrow" is a plan until the clock says otherwise.
+      status: new Date(occurredAt).getTime() > Date.now() + 60_000 ? 'scheduled' : 'confirmed',
     };
 
     await mutate(
