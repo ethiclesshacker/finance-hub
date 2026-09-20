@@ -74,3 +74,79 @@ test('resolveDays turns phrases into inclusive local dates', () => {
   const today = resolveDays('today', undefined, tz);
   assert.equal(today.from, today.to);
 });
+
+// ── The body section of a summary ──────────────────────
+import { lifeSection, renderLifeLines } from '../src/ledger/summary.js';
+import { resolveSettings, settingDefaults, SETTINGS_SCHEMA } from '../src/settings-schema.js';
+
+const lifeDay = (day, over = {}) => ({
+  day,
+  body: { steps: 10000, sleep_hours: 5.07, fell_asleep: '00:44', woke: '05:49', resting_hr: 67, hrv_ms: 74 },
+  food: { eaten_kcal: 2150, protein_g: 74, meals: 3, meals_unpriced: 0 },
+  energy: { eaten_kcal: 2150, burned_kcal: 2441, balance_kcal: -291, target_kcal: 2000, eaten_vs_target: 150, complete: true },
+  ...over,
+});
+
+test('lifeSection: nothing recorded is said, not left blank', () => {
+  assert.deepEqual(lifeSection([]), { recorded: false });
+  assert.deepEqual(lifeSection([{ day: '2026-09-20', events: 3, money: { spend: 10 } }]), { recorded: false });
+  assert.deepEqual(renderLifeLines({ recorded: false }), []);
+  assert.deepEqual(renderLifeLines(undefined), []);
+});
+
+test('lifeSection: one day reads as that day', () => {
+  const body = lifeSection([lifeDay('2026-09-19', {
+    activity: [{ activity: 'walking', minutes: 37, distance_km: 3.1, source: 'watch' }],
+  })]);
+  assert.equal(body.steps, 10000);
+  assert.equal(body.balance_kcal, -291);
+  assert.equal(body.energy_complete, true);
+  assert.equal('weight_kg' in body, false);
+  const text = renderLifeLines(body).join('\n');
+  assert.match(text, /10,000 steps, slept 5h 04m \(00:44–05:49\), resting HR 67\./);
+  assert.match(text, /ate 2,150 kcal, burned 2,441, balance −291 against a 2,000 target\./);
+  assert.match(text, /Activity: walking 37 min, 3\.1 km \(watch\)/);
+});
+
+test('lifeSection: an incomplete day says so, and a day with no food does not invent a balance', () => {
+  const partial = lifeSection([lifeDay('2026-09-18', {
+    food: { eaten_kcal: 2076, meals: 3, meals_unpriced: 1 },
+    energy: { eaten_kcal: 2076, burned_kcal: 2659, balance_kcal: -583, target_kcal: 2000, complete: false },
+  })]);
+  assert.match(renderLifeLines(partial).join('\n'), /provisional, 1 meal unpriced/);
+
+  const noFood = lifeSection([{ day: '2026-09-19', body: { steps: 100 }, energy: { burned_kcal: 3096, target_kcal: 2000, complete: false } }]);
+  assert.equal('balance_kcal' in noFood, false);
+  assert.match(renderLifeLines(noFood).join('\n'), /burned 3,096 kcal; nothing eaten is on record/);
+});
+
+test('lifeSection: a range averages over the days that have the number', () => {
+  const days = [
+    lifeDay('2026-09-14', { body: { steps: 15000, sleep_hours: 8, resting_hr: 60, weight_kg: 87.4 } }),
+    { day: '2026-09-15' },                                             // the Watch was on the charger
+    lifeDay('2026-09-16', { body: { steps: 5000, resting_hr: 70, weight_kg: 86.1 },
+      energy: { eaten_kcal: 1000, burned_kcal: 2500, balance_kcal: -1500, target_kcal: 2000, complete: false },
+      activity: [{ activity: 'walking', minutes: 30, source: 'watch' }, { activity: 'cycling', source: 'ledger', note: 'Failed attempt' }] }),
+  ];
+  const body = lifeSection(days);
+  assert.equal(body.days, 3);
+  assert.equal(body.steps_avg, 10000);
+  assert.equal(body.sleep_hours_avg, 8);
+  assert.equal(body.nights_recorded, 1);
+  assert.equal(body.weight_change_kg, -1.3);
+  assert.equal(body.balance_kcal_avg, -291, 'only the complete day counts');
+  assert.equal(body.balance_over_days, 1);
+  assert.equal(body.workouts, 2);
+  assert.equal(body.active_minutes, 30);
+  const text = renderLifeLines(body).join('\n');
+  assert.match(text, /Weight: 87\.4 → 86\.1 kg \(−1\.3 kg\)\./);
+  assert.match(text, /balance −291 a day over the 1 fully logged day\./);
+});
+
+test('settings catalogue resolves stored values over defaults and says which is which', () => {
+  assert.equal(Object.keys(settingDefaults()).length, Object.keys(SETTINGS_SCHEMA).length);
+  const r = resolveSettings({ food_kcal_target: 2000, monthly_expenses: null });
+  assert.deepEqual([r.food_kcal_target.value, r.food_kcal_target.set_by], [2000, 'user']);
+  assert.deepEqual([r.monthly_expenses.value, r.monthly_expenses.set_by], [SETTINGS_SCHEMA.monthly_expenses.default, 'default']);
+  assert.equal(resolveSettings().fi_multiplier.set_by, 'default');
+});

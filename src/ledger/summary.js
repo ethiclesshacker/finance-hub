@@ -203,6 +203,113 @@ function possiblyMissing(events, { timeZone, from, to }) {
   return gaps;
 }
 
+const present = v => v !== null && v !== undefined;
+const mean = values => (values.length ? values.reduce((a, b) => a + b, 0) / values.length : null);
+const round1 = v => (present(v) ? Math.round(v * 10) / 10 : null);
+
+/**
+ * The body half of a digest, from life_days() rows: what the sensors and the
+ * food log say, next to what the events say.
+ *
+ * One day comes back as that day's numbers. Several come back as averages —
+ * each over the days that HAVE the number, because a night the Watch was on
+ * the charger is a gap, not a night of zero sleep. The energy balance is
+ * averaged over complete days only, and says how many that was: a mean that
+ * quietly includes days with unpriced meals reads as a deficit nobody ran.
+ *
+ * Always returns an object, `{ recorded: false }` when there is nothing, so a
+ * stored summary can tell "no body data" from "written before this existed".
+ */
+export function lifeSection(days = []) {
+  const withData = days.filter(d => d.body || d.food || d.energy || d.activity);
+  if (!withData.length) return { recorded: false };
+
+  const activity = days.flatMap(d => (d.activity || []).map(a => ({ day: d.day, ...a })));
+
+  if (days.length === 1) {
+    const d = days[0];
+    return stripEmpty({
+      recorded: true,
+      steps: d.body?.steps, sleep_hours: d.body?.sleep_hours,
+      fell_asleep: d.body?.fell_asleep, woke: d.body?.woke,
+      resting_hr: d.body?.resting_hr, hrv_ms: d.body?.hrv_ms, weight_kg: d.body?.weight_kg,
+      eaten_kcal: d.energy?.eaten_kcal, burned_kcal: d.energy?.burned_kcal,
+      balance_kcal: d.energy?.balance_kcal, target_kcal: d.energy?.target_kcal,
+      energy_complete: d.energy ? Boolean(d.energy.complete) : undefined,
+      meals_unpriced: d.food?.meals_unpriced || undefined,
+      activity,
+    });
+  }
+
+  const pick = (group, key) => days.map(d => d[group]?.[key]).filter(present).map(Number);
+  const weights = days.filter(d => present(d.body?.weight_kg)).map(d => ({ day: d.day, kg: Number(d.body.weight_kg) }));
+  const complete = days.filter(d => d.energy?.complete);
+  return stripEmpty({
+    recorded: true,
+    days: days.length,
+    steps_avg: present(mean(pick('body', 'steps'))) ? Math.round(mean(pick('body', 'steps'))) : null,
+    sleep_hours_avg: round1(mean(pick('body', 'sleep_hours'))),
+    nights_recorded: pick('body', 'sleep_hours').length,
+    resting_hr_avg: present(mean(pick('body', 'resting_hr'))) ? Math.round(mean(pick('body', 'resting_hr'))) : null,
+    weight_first: weights[0], weight_last: weights.length > 1 ? weights[weights.length - 1] : undefined,
+    weight_change_kg: weights.length > 1 ? round1(weights[weights.length - 1].kg - weights[0].kg) : undefined,
+    eaten_kcal_avg: present(mean(pick('energy', 'eaten_kcal'))) ? Math.round(mean(pick('energy', 'eaten_kcal'))) : null,
+    burned_kcal_avg: present(mean(pick('energy', 'burned_kcal'))) ? Math.round(mean(pick('energy', 'burned_kcal'))) : null,
+    balance_kcal_avg: complete.length ? Math.round(mean(complete.map(d => Number(d.energy.balance_kcal)))) : null,
+    balance_over_days: complete.length || undefined,
+    target_kcal: days.find(d => d.energy?.target_kcal)?.energy.target_kcal,
+    workouts: activity.length || undefined,
+    active_minutes: activity.reduce((sum, a) => sum + (Number(a.minutes) || 0), 0) || undefined,
+  });
+}
+
+function stripEmpty(obj) {
+  return Object.fromEntries(Object.entries(obj).filter(([, v]) =>
+    v !== null && v !== undefined && !(Array.isArray(v) && !v.length)));
+}
+
+/** The body section as lines of text. Empty when nothing was recorded. */
+export function renderLifeLines(body) {
+  if (!body?.recorded) return [];
+  const n = v => Math.round(Number(v)).toLocaleString('en-IN');
+  const hm = h => `${Math.floor(Math.round(h * 60) / 60)}h ${String(Math.round(h * 60) % 60).padStart(2, '0')}m`;
+  const signed = v => `${v > 0 ? '+' : v < 0 ? '−' : ''}${n(Math.abs(v))}`;
+  const lines = [];
+
+  if (body.days) {
+    const bits = [];
+    if (present(body.steps_avg)) bits.push(`${n(body.steps_avg)} steps a day`);
+    if (present(body.sleep_hours_avg)) bits.push(`${hm(body.sleep_hours_avg)} sleep a night over ${body.nights_recorded} nights`);
+    if (present(body.resting_hr_avg)) bits.push(`resting HR ${body.resting_hr_avg}`);
+    if (bits.length) lines.push(`Body: ${bits.join(', ')}.`);
+    if (body.weight_last) lines.push(`Weight: ${body.weight_first.kg} → ${body.weight_last.kg} kg (${body.weight_change_kg > 0 ? '+' : body.weight_change_kg < 0 ? '−' : ''}${Math.abs(body.weight_change_kg).toFixed(1)} kg).`);
+    else if (body.weight_first) lines.push(`Weight: ${body.weight_first.kg} kg on ${body.weight_first.day}.`);
+    if (present(body.eaten_kcal_avg) && present(body.burned_kcal_avg)) {
+      lines.push(`Energy: about ${n(body.eaten_kcal_avg)} kcal eaten and ${n(body.burned_kcal_avg)} burned a day`
+        + (present(body.balance_kcal_avg) ? `; balance ${signed(body.balance_kcal_avg)} a day over the ${body.balance_over_days} fully logged day${body.balance_over_days === 1 ? '' : 's'}.` : '; no day was fully logged, so no balance.'));
+    }
+    if (body.workouts) lines.push(`Activity: ${body.workouts} workout${body.workouts === 1 ? '' : 's'}, ${n(body.active_minutes || 0)} minutes.`);
+    return lines;
+  }
+
+  const bits = [];
+  if (present(body.steps)) bits.push(`${n(body.steps)} steps`);
+  if (present(body.sleep_hours)) bits.push(`slept ${hm(body.sleep_hours)}${body.fell_asleep ? ` (${body.fell_asleep}–${body.woke})` : ''}`);
+  if (present(body.resting_hr)) bits.push(`resting HR ${body.resting_hr}`);
+  if (present(body.weight_kg)) bits.push(`weight ${body.weight_kg} kg`);
+  if (bits.length) lines.push(`Body: ${bits.join(', ')}.`);
+  if (present(body.eaten_kcal) && present(body.burned_kcal)) {
+    lines.push(`Energy: ate ${n(body.eaten_kcal)} kcal, burned ${n(body.burned_kcal)}, balance ${signed(body.balance_kcal)} against a ${n(body.target_kcal)} target`
+      + (body.energy_complete ? '.' : ` — provisional${body.meals_unpriced ? `, ${body.meals_unpriced} meal${body.meals_unpriced === 1 ? '' : 's'} unpriced` : ''}.`));
+  } else if (present(body.burned_kcal)) {
+    lines.push(`Energy: burned ${n(body.burned_kcal)} kcal; nothing eaten is on record.`);
+  }
+  for (const a of body.activity || []) {
+    lines.push(`Activity: ${a.activity}${a.minutes ? ` ${a.minutes} min` : ''}${a.distance_km ? `, ${a.distance_km} km` : ''} (${a.source})${a.note && a.source === 'ledger' ? ` — ${a.note}` : ''}`);
+  }
+  return lines;
+}
+
 /**
  * A readable summary with no model involved. This is what gets stored when the
  * LLM is disabled or unreachable, and it is the input the model is given when
@@ -235,6 +342,8 @@ export function renderDigestText(digest, { label = 'Day' } = {}) {
       .map(([k, v]) => `${k} ${fmtMoney(v, 'INR')}`).join(', ');
     lines.push(`Spend: ${fmtMoney(digest.spend.total, 'INR')}${buckets ? ` (${buckets})` : ''}`);
   }
+
+  lines.push(...renderLifeLines(digest.body));
 
   section('Open questions', digest.open_questions, q => q.question);
   section('Possibly missing', digest.possibly_missing.map(text => ({ text })), q => q.text);

@@ -21,3 +21,8 @@ export const intraday = (type, day, minutes = 60) => rpc('health_intraday', { p_
 export const sleep    = (from, to)               => rpc('health_sleep', { p_from: from, p_to: to });
 export const workouts = (from, to)               => rpc('health_workouts', { p_from: from, p_to: to });
 export const catalog  = ()                       => rpc('health_catalog');
+
+// The joined view: the same days with money and food alongside the body, and
+// the Watch's workouts merged with anything told to Hermes (0011_life_api.sql).
+export const days     = (from, to)               => rpc('life_days', { p_from: from, p_to: to });
+export const activity = (from, to)               => rpc('life_activity', { p_from: from, p_to: to });

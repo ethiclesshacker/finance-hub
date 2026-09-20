@@ -3606,6 +3606,77 @@ input, select, textarea {
 }
 
 /* ============================================================
+   POINTS — rows that arrive from the ledger
+   ============================================================ */
+.pt-banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  margin-bottom: var(--sp-4);
+  background: var(--bg-card);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+.pt-banner-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+}
+.pt-banner strong { color: var(--text-primary); }
+
+.pt-merchant { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); }
+/* What the bank called it, under what you call it. */
+.pt-bank-name,
+.pt-typed {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  margin-top: var(--sp-1);
+}
+.pt-typed { text-align: right; text-decoration: line-through; }
+.pt-confirm { margin-right: var(--sp-2); }
+
+.pt-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-4);
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.pt-check input { margin-top: 0.2rem; }
+
+.pt-recon-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-5);
+  font-size: var(--fs-md);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.pt-recon-head:first-child { margin-top: var(--sp-2); }
+.pt-recon-count {
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+.pt-recon-note {
+  max-width: 60rem;
+  margin: var(--sp-1) 0 var(--sp-3);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-snug);
+  color: var(--text-muted);
+}
+
+/* ============================================================
    HEALTH
    Two charts to a row, because each carries exactly one axis: steps and heart
    rate sit side by side rather than sharing a plot with two scales.
@@ -3626,6 +3697,8 @@ input, select, textarea {
 }
 .hl-legend-item { display: inline-flex; align-items: center; gap: var(--sp-1); }
 .hl-swatch { width: 0.625rem; height: 0.625rem; border-radius: 2px; }
+/* A reference line in a legend is a line, not a block. */
+.hl-swatch--line { height: 0; width: 0.875rem; border-radius: 0; border-top: 2px dashed var(--text-muted); }
 
 /* Bars in the steps chart select a day. */
 #hl-steps { cursor: pointer; }

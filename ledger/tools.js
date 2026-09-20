@@ -26,6 +26,7 @@ import { dishName, summariseItems } from '../src/ledger/items.js';
 import { localDateISO, normalizeName, entityRef } from '../src/ledger/normalize.js';
 import { findReference } from './nutrition/reference.js';
 import { resolvePending } from './nutrition/resolve.js';
+import { resolveSettings } from '../src/settings-schema.js';
 
 async function rpc(fn, args) {
   const { data, error } = await db().rpc(fn, args);
@@ -727,7 +728,8 @@ export const TOOLS = {
       + '"88.4 this morning", "waist is 96cm". One reading per metric per day: telling it again the '
       + 'same day corrects the earlier value instead of duplicating it, so the user can re-weigh '
       + 'freely. Weight is the one that matters most here — it is the feedback loop for the daily '
-      + 'calorie target — so when the user mentions weight in passing, offer to log it.',
+      + 'calorie target — so when the user mentions weight in passing, offer to log it. This is THE place weight '
+      + 'is written; get_day and get_health_overview read it back alongside any reading from Apple Health.',
     parameters: {
       type: 'object', required: ['metric', 'value'],
       properties: {
@@ -807,7 +809,10 @@ export const TOOLS = {
       + 'says they did something physical — "went to the gym", "ran 5k", "played badminton for an '
       + 'hour". Facts the user stated (what, how long, how far) land as facts; any estimated calorie '
       + 'burn is stored as inference, clearly separated, because the user said what they did, not '
-      + 'what it burned.',
+      + 'what it burned. His Apple Watch records walks, runs and gym sessions by itself and they arrive when his '
+      + 'phone syncs — so this is for what the Watch did NOT capture: a sport played without it, a session he '
+      + 'forgot to start, a comment worth keeping ("knee hurt after 2 km"). If unsure whether the Watch has it, '
+      + 'log it anyway: a telling that matches a Watch workout is folded into it, never counted twice.',
     parameters: {
       type: 'object', required: ['activity'],
       properties: {
@@ -924,6 +929,78 @@ export const TOOLS = {
     },
   },
 
+  // ── The whole day ────────────────────────────────────
+  //
+  // Money, food, body and activity used to be three stores with three sets of
+  // tools, and a question like "how was my week" meant calling all of them and
+  // hoping they agreed. life_days() joins them in SQL; this is the front door.
+
+  get_day: {
+    description: 'Everything about a day, or each day in a range, in one object: money spent and received, calories and protein '
+      + 'eaten, steps, sleep, heart, weight, calories burned, the energy balance against the calorie target, and workouts. '
+      + 'START HERE for "how was my day", "how was my week", "am I in a deficit", or anything that crosses money, food and body. '
+      + 'money.spend is everything; when part of it was work (card spends he files under his employer, reimbursable) the day '
+      + 'also carries money.work_spend and money.personal_spend — judge his spending on personal_spend, and mention work separately. '
+      + 'energy.balance_kcal is eaten minus burned (negative is a deficit). Eaten comes from receipts and what he told you, so '
+      + 'it is a floor: when energy.complete is false say the balance is provisional. That happens for today, when '
+      + 'food.meals_unpriced > 0, and when energy.eaten_looks_partial is set (under 60% of target — almost always a meal '
+      + 'he did not log, so ask what he ate rather than congratulating him on the deficit). '
+      + 'Up to 120 days; for longer body-only trends use get_health_overview.',
+    parameters: { type: 'object', properties: { date_range: { ...DATE_RANGE, default: 'today' } } },
+    handler: async (args) => {
+      const { from, to } = resolveDays(args.date_range, 'today');
+      return rpc('life_days', { p_from: from, p_to: to, p_user_id: await resolveUserId() });
+    },
+  },
+
+  // ── Finance ──────────────────────────────────────────
+
+  get_net_worth: {
+    description: 'Net worth from the snapshots he records: the latest figure with its asset breakdown (stocks, mutual funds, cash, '
+      + 'EPF, gold, FDs) and liabilities, the change since the previous snapshot, and recent history. In INR. Snapshots are '
+      + 'entered by hand every week or two, so always say the date of the latest one.',
+    parameters: { type: 'object', properties: { history: { type: 'integer', default: 12, description: 'How many recent snapshots to include.' } } },
+    handler: async args => rpc('finance_net_worth', { p_limit: args.history ?? 12, p_user_id: await resolveUserId() }),
+  },
+
+  get_card_points: {
+    description: 'Credit card reward points (HSBC TravelOne): current balance, lifetime accrued and redeemed, and for a period the '
+      + 'spend, points earned, points per ₹100, a month-by-month split, top merchants and past redemptions. The balance is always '
+      + 'lifetime; date_range only scopes the period figures. For what was bought, use search_events — this is the points view. '
+      + 'Rows are now created automatically from card alerts: `assumed` counts rows whose label and multiplier were inferred from '
+      + 'earlier spends at the same merchant and that he has not confirmed yet, so say the balance includes that many assumed points. '
+      + 'range.work_spend is the part of the period spend filed under his work label.',
+    parameters: { type: 'object', properties: { date_range: DATE_RANGE } },
+    handler: async (args) => {
+      const range = args.date_range ? resolveDays(args.date_range) : { from: null, to: null };
+      return rpc('finance_card_points', { p_from: range.from, p_to: range.to, p_user_id: await resolveUserId() });
+    },
+  },
+
+  get_targets: {
+    description: 'His own targets and assumptions: daily calorie target, monthly income and baseline expenses, FI multiplier and the '
+      + 'FI target it implies, expected return, retirement age, emergency runway, card reward targets. Each value says whether HE set '
+      + 'it (set_by: user) or it is the app default (set_by: default) — treat a default as a placeholder, not as his goal. '
+      + 'Call this before judging any number against "his target".',
+    parameters: { type: 'object', properties: {} },
+    handler: async () => {
+      const stored = await rpc('finance_settings', { p_user_id: await resolveUserId() }) || {};
+      const all = resolveSettings(stored);
+      // The matching thresholds are the pipeline's business, and the identifiers are his name.
+      const targets = Object.fromEntries(Object.entries(all)
+        .filter(([key, s]) => s.group !== 'Event ledger' && s.group !== 'Profile' || ['age', 'retirement_age'].includes(key)));
+      const annualExpenses = Number(all.monthly_expenses.value) * 12;
+      return {
+        targets,
+        derived: {
+          annual_expenses: annualExpenses,
+          fi_target: Math.round(annualExpenses * Number(all.fi_multiplier.value)),
+          fi_target_rests_on_defaults: [all.monthly_expenses, all.fi_multiplier].some(s => s.set_by === 'default'),
+        },
+      };
+    },
+  },
+
   // ── Apple Health ─────────────────────────────────────
   //
   // The phone syncs raw HealthKit samples — a row every minute or two, per
@@ -988,12 +1065,13 @@ export const TOOLS = {
   },
 
   get_workouts: {
-    description: 'Workouts recorded by Apple Watch or fitness apps: activity, start, minutes, active calories, distance. '
-      + 'Distinct from log_activity, which records what the user tells you; these were measured.',
+    description: 'Workouts and physical activity: everything the Apple Watch recorded, plus anything he told you that the Watch did '
+      + 'not. Each item says its source (watch or ledger). When he described a workout the Watch also recorded, it appears ONCE, as '
+      + 'the Watch measured it, with his words in `note`. Check here before log_activity.',
     parameters: { type: 'object', properties: { date_range: { ...DATE_RANGE, default: 'last 30 days' } } },
     handler: async (args) => {
       const { from, to } = resolveDays(args.date_range, 'last 30 days');
-      return rpc('health_workouts', { p_from: from, p_to: to, p_user_id: await resolveUserId() });
+      return rpc('life_activity', { p_from: from, p_to: to, p_user_id: await resolveUserId() });
     },
   },
 

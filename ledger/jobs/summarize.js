@@ -15,17 +15,25 @@
 import { config } from '../config.js';
 import { chat } from '../extract/openai.js';
 import { searchEvents, getDailySummary, upsertDailySummary, upsertPeriodSummary,
-         setting, resolveUserId } from '../db.js';
-import { buildDigest, renderDigestText } from '../../src/ledger/summary.js';
+         setting, resolveUserId, lifeDays } from '../db.js';
+import { buildDigest, renderDigestText, lifeSection } from '../../src/ledger/summary.js';
 import { localDateISO } from '../../src/ledger/normalize.js';
 
-const PROSE_PROMPT = `You write a short factual summary of one person's day or period from a structured digest.
+// A day fits in 120 words. A week or a month does not: at that length the
+// model kept the trips and the restaurants and dropped the energy balance,
+// which is the one line a weight goal is steered by.
+// Room to carry the body and energy lines without dropping the events. A day
+// has one of each; a month has trends worth a sentence apiece.
+const PROSE_WORDS = { day: 160, week: 260, month: 320 };
+
+const prosePrompt = (maxWords) => `You write a short factual summary of one person's day or period from a structured digest.
 
 Rules:
 - Use ONLY what is in the digest. Never add an event, a place, a person or an amount that is not there.
 - If the digest is thin, the summary is thin. Do not pad it.
+- When the plain rendering has Body, Weight, Energy or Activity lines, carry every number in them. If the energy balance is marked provisional, or covers only some days, say exactly that — never present it as the whole period.
 - Repeat the open questions and gaps verbatim in meaning — they are the honest part.
-- Second person, plain language, no motivational commentary. 120 words maximum.`;
+- Second person, plain language, no motivational commentary. ${maxWords} words maximum.`;
 
 export async function summarize(options = {}) {
   const userId = await resolveUserId();
@@ -61,9 +69,17 @@ async function summarizePeriod(userId, timeZone, period, start, end, label) {
   const events = response?.events || [];
 
   const digest = buildDigest(events, { timeZone, from, to });
+
+  // What the sensors and the food log say about the same days. A summary
+  // without it still stands, so a failure here is recorded, not fatal.
+  try {
+    digest.body = lifeSection(await lifeDays(userId, start, end) || []);
+  } catch (error) {
+    digest.body = { recorded: false, error: error.message };
+  }
   const deterministic = renderDigestText(digest, { label });
 
-  const { text, generatedBy } = await writeProse(deterministic, digest, label);
+  const { text, generatedBy } = await writeProse(deterministic, digest, label, PROSE_WORDS[period] ?? PROSE_WORDS.week);
 
   const metadata = {
     generated_from: 'events',
@@ -86,7 +102,7 @@ async function summarizePeriod(userId, timeZone, period, start, end, label) {
  * failure — a summary that reads a little flat is strictly better than a run
  * that produced none.
  */
-async function writeProse(deterministic, digest, label) {
+async function writeProse(deterministic, digest, label, maxWords = 120) {
   if (!config.llm.enabled || !config.llm.apiKey) {
     return { text: deterministic, generatedBy: 'deterministic' };
   }
@@ -97,7 +113,7 @@ async function writeProse(deterministic, digest, label) {
   const { ok, content, error } = await chat({
     job: 'summarize:prose',
     messages: [
-      { role: 'system', content: PROSE_PROMPT },
+      { role: 'system', content: prosePrompt(maxWords) },
       { role: 'user', content: `${label}\n\nDigest (JSON):\n${JSON.stringify(digest)}\n\nPlain rendering:\n${deterministic}` },
     ],
   });
@@ -131,10 +147,12 @@ async function catchUpDays(userId, timeZone, days) {
     const existing = await getDailySummary(userId, date);
 
     if (!existing?.live_event_count) { skipped.push({ date, reason: 'no events' }); continue; }
-    if (existing.summary && !existing.stale) { skipped.push({ date, reason: 'already current' }); continue; }
+    // A summary written before the body section existed is rewritten once.
+    const lacksBody = existing.summary && !existing.sections?.body;
+    if (existing.summary && !existing.stale && !lacksBody) { skipped.push({ date, reason: 'already current' }); continue; }
 
     done.push(await summarizeOneDay(userId, timeZone, date,
-      existing.summary ? 'stale' : 'missing'));
+      !existing.summary ? 'missing' : existing.stale ? 'stale' : 'no body section'));
   }
 
   return { period: 'day', mode: 'catch-up', window_days: days, generated: done, skipped };

@@ -32,9 +32,13 @@ const SLEEP_RAMP = { deep: '#8468e8', core: '#a78bfa', rem: '#e0d9ff' };
 // reports "asleep". It is real sleep but has no place in the order, so it gets
 // a neutral, not a fourth step of the ramp.
 const SLEEP_UNSTAGED = '#64748b';
+// Two series on one axis, in one unit. Validated as a categorical pair on
+// --bg-card (in band, CVD ΔE 24, 3:1 on the surface). Slightly deeper than
+// --accent and --warning, which sit above the dark-mode lightness band.
+const ENERGY = { burned: '#1d9bd8', eaten: '#d97706' };
 
 let charts = {};
-let state = { range: 7, days: [], nights: [], workouts: [], selectedDay: null };
+let state = { range: 7, days: [], nights: [], workouts: [], life: [], selectedDay: null };
 // A slow response for a range you have already left must not repaint the screen.
 let loadToken = 0;
 
@@ -46,7 +50,7 @@ function savedRange() {
 }
 
 export async function renderHealth(container) {
-  state = { range: savedRange(), days: [], nights: [], workouts: [], selectedDay: todayISO() };
+  state = { range: savedRange(), days: [], nights: [], workouts: [], life: [], selectedDay: todayISO() };
 
   container.innerHTML = `
     <div class="page-header">
@@ -73,6 +77,10 @@ export async function renderHealth(container) {
         ${chartCard('hl-sleep', 'Sleep', 'Time asleep per night, by stage. A night is dated by the morning it ended.', sleepLegend())}
       </div>
 
+      ${chartCard('hl-energy', 'Energy: eaten against burned',
+        'Kilocalories per day. Burned is measured all day by the Watch; eaten comes from receipts and what you told Edith, so it is a floor. Paler bars are days with a meal that could not be priced, or today.',
+        energyLegend())}
+
       <div class="hl-grid">
         ${chartCard('hl-rhr', 'Resting heart rate', 'Beats per minute, one reading per day')}
         ${chartCard('hl-hrv', 'Heart rate variability', 'Daily average, milliseconds')}
@@ -84,7 +92,7 @@ export async function renderHealth(container) {
           <div class="chart-header">
             <div>
               <div class="chart-title">Workouts</div>
-              <div class="chart-subtitle">Recorded by the Watch or a fitness app</div>
+              <div class="chart-subtitle">What the Watch recorded, plus anything you told Edith that it missed</div>
             </div>
           </div>
           <div id="hl-workouts" class="hl-list"></div>
@@ -128,6 +136,11 @@ function chartCard(id, title, subtitle, extra = '') {
     </div>`;
 }
 
+function energyLegend() {
+  const item = (color, label) => `<span class="hl-legend-item"><span class="hl-swatch" style="background:${color}"></span>${label}</span>`;
+  return `<div class="hl-legend" aria-hidden="true">${item(ENERGY.burned, 'Burned')}${item(ENERGY.eaten, 'Eaten')}<span class="hl-legend-item"><span class="hl-swatch hl-swatch--line"></span>Target</span></div>`;
+}
+
 function sleepLegend() {
   const item = (key, label) => `<span class="hl-legend-item"><span class="hl-swatch" style="background:${SLEEP_RAMP[key]}"></span>${label}</span>`;
   return `<div class="hl-legend" aria-hidden="true">${item('deep', 'Deep')}${item('core', 'Core')}${item('rem', 'REM')}<span class="hl-legend-item"><span class="hl-swatch" style="background:${SLEEP_UNSTAGED}"></span>Unstaged</span></div>`;
@@ -140,14 +153,17 @@ async function load() {
   const alertEl = document.getElementById('hl-alert');
 
   try {
-    const [days, nights, workouts, cat] = await Promise.all([
-      health.overview(from, to), health.sleep(from, to), health.workouts(from, to), health.catalog(),
+    const [days, nights, workouts, cat, life] = await Promise.all([
+      health.overview(from, to), health.sleep(from, to), health.activity(from, to), health.catalog(),
+      // The joined days feed one chart; the rest of the page still stands without them.
+      health.days(from, to).catch(() => []),
     ]);
     if (token !== loadToken || !document.getElementById('hl-kpis')) return;
 
     state.days = days || [];
     state.nights = nights || [];
     state.workouts = workouts || [];
+    state.life = life || [];
 
     const sub = document.getElementById('hl-sub');
     if (sub) sub.textContent = cat?.last_sync_at
@@ -163,6 +179,7 @@ async function load() {
     renderKpis();
     renderSteps();
     renderSleep();
+    renderEnergy();
     renderLine('rhr', 'hl-rhr', 'resting_hr', 'bpm', CHART_COLORS.pink);
     renderLine('hrv', 'hl-hrv', 'hrv_ms', 'ms', CHART_COLORS.teal);
     renderWorkouts();
@@ -350,6 +367,41 @@ function renderSleep() {
   });
 }
 
+function renderEnergy() {
+  const byDay = new Map(state.life.map(d => [d.day, d.energy || {}]));
+  const energy = state.days.map(d => byDay.get(d.day) || {});
+  const target = energy.find(e => e.target_kcal)?.target_kcal ?? null;
+  // A provisional eaten figure is drawn paler: it is a floor, not a total.
+  const pale = hex => `${hex}73`;
+  const options = baseOptions({ unit: 'kcal' });
+  options.plugins.tooltip.callbacks.footer = items => {
+    const e = energy[items[0].dataIndex];
+    if (e.balance_kcal === undefined) return e.burned_kcal !== undefined ? 'Nothing eaten is on record' : '';
+    const sign = e.balance_kcal > 0 ? '+' : e.balance_kcal < 0 ? '−' : '';
+    return `Balance ${sign}${Math.abs(e.balance_kcal).toLocaleString('en-IN')} kcal${e.complete ? '' : ' · provisional'}`;
+  };
+  // The target is a reference, not a reading: keep it out of the hover list.
+  options.plugins.tooltip.filter = item => item.dataset.label !== 'Target';
+  const bar = { borderRadius: 3, borderSkipped: 'bottom', maxBarThickness: 14, categoryPercentage: 0.7, barPercentage: 0.9 };
+  draw('energy', 'hl-energy', {
+    type: 'bar',
+    data: {
+      labels: state.days.map(d => shortDay(d.day)),
+      datasets: [
+        { label: 'Burned', data: energy.map(e => e.burned_kcal ?? null), backgroundColor: ENERGY.burned, ...bar },
+        { label: 'Eaten', data: energy.map(e => e.eaten_kcal ?? null),
+          backgroundColor: energy.map(e => (e.complete ? ENERGY.eaten : pale(ENERGY.eaten))), ...bar },
+        ...(target ? [{
+          type: 'line', label: 'Target', data: state.days.map(() => target),
+          borderColor: cssVar('--text-muted', '#94a3b8'), borderWidth: 1.5, borderDash: [4, 4],
+          pointRadius: 0, pointHoverRadius: 0, fill: false,
+        }] : []),
+      ],
+    },
+    options,
+  });
+}
+
 function renderLine(key, canvasId, field, unit, color) {
   const options = baseOptions({ unit });
   // A heart rate never sits near zero; starting the axis there flattens every
@@ -421,7 +473,8 @@ function renderWorkouts() {
     <div class="hl-row">
       <div class="hl-row-main">
         <div class="hl-row-title">${title(w.activity)}</div>
-        <div class="hl-row-sub">${escapeHTML(longDay(w.day))}</div>
+        <div class="hl-row-sub">${escapeHTML(longDay(w.day))} · ${w.source === 'watch' ? 'Watch' : 'Told to Edith'}${
+          w.note && w.source === 'ledger' ? ` · ${escapeHTML(w.note)}` : ''}</div>
       </div>
       <div class="hl-row-stats mono">
         <span>${escapeHTML(String(w.minutes ?? '—'))} min</span>

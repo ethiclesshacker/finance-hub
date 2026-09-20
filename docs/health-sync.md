@@ -111,6 +111,32 @@ Three callers, one set of functions:
                               (select id from auth.users limit 1));
   ```
 
+### Joined with the rest of your life
+
+`0011_life_api.sql` joins the three stores that used to be separate (finance
+tables, the event ledger, Apple Health):
+
+| Function | Returns |
+|---|---|
+| `life_days(from, to)` | One object per day: money, food, body, energy balance against the calorie target, activity |
+| `life_activity(from, to)` | Watch workouts, plus ledger activities the Watch missed. A telling that matches a Watch workout is folded into it |
+| `finance_net_worth(limit)` | Latest snapshot with breakdown, change, history |
+| `finance_card_points(from, to)` | Points balance, period spend and earn rate, merchants, redemptions |
+| `finance_settings()` | Saved settings only; defaults come from `src/settings-schema.js` |
+
+Two rules worth knowing. **Weight** is written to the ledger and read as the
+union of both stores, newest reading wins, so the Health page and Hermes agree.
+**Energy balance** is only trusted on days marked `complete`: not today, no
+unpriced meal, and food of at least 60% of the calorie target. A day with one
+snack logged is a gap in the record, not a 2,500 kcal deficit.
+
+Hermes tools over these: `get_day`, `get_net_worth`, `get_card_points`,
+`get_targets`, and `get_workouts` (now the merged feed). The daily, weekly and
+monthly summaries (`ledger/jobs/summarize.js`) carry a `body` section built from
+`life_days`, and Edith's Sunday `weekly-review` cron reads all of it. Its prompt
+is kept at `~/.hermes/cron/weekly-review.prompt.current.txt`; edit with
+`hermes cron edit 612f8bb3123b --prompt "$(cat <file>)"`.
+
 The `anon` key cannot call any of them, and the `health` schema stays
 unexposed. After a large first sync or backfill, run `analyze health.metrics;`
 once: until the planner has statistics, a 90-day overview takes seconds
