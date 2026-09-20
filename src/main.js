@@ -6,7 +6,7 @@ import './vendor.js';
 import { loadSettings } from './settings.js';
 import { renderLogin } from './views/login.js';
 import { renderApp } from './views/app.js';
-import { applyChartDefaults } from './utils.js';
+import { applyChartDefaults, installCallListener } from './utils.js';
 import './style.css';
 
 // Which user is currently painted on screen.
@@ -40,6 +40,10 @@ async function render(session) {
 async function init() {
   // Apply Chart.js global defaults once — all views share these settings.
   applyChartDefaults();
+
+  // Buttons in generated table markup (Edit, Delete, Confirm…) run through one
+  // delegated listener, because the production CSP refuses inline handlers.
+  installCallListener();
 
   // getSession() awaits the client's initialisation, which includes exchanging
   // a magic-link token in the URL. On a callback load that means the session is

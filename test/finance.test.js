@@ -139,3 +139,21 @@ test('formatDuration', () => {
   assert.equal(formatDuration(15), '1 yr 3 mos');
   assert.equal(formatDuration(24), '2 yrs');
 });
+
+// ── Buttons in generated markup must not rely on inline handlers ──
+import { readFileSync, readdirSync } from 'node:fs';
+
+test('no inline event handlers anywhere: the production CSP refuses them silently', () => {
+  const files = ['index.html', ...['src', 'src/views', 'src/ledger', 'src/health']
+    .flatMap(dir => readdirSync(dir).filter(f => f.endsWith('.js')).map(f => `${dir}/${f}`))];
+  const offenders = [];
+  for (const file of files) {
+    readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+      // An attribute in markup, not the word in a comment or a property name.
+      if (/\son(click|change|input|submit|keydown|keyup|load|error)\s*=\s*["'`$]/.test(line) && !/^\s*(\/\/|\*)/.test(line)) {
+        offenders.push(`${file}:${i + 1}`);
+      }
+    });
+  }
+  assert.deepEqual(offenders, []);
+});

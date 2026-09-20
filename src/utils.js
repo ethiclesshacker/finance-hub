@@ -208,12 +208,53 @@ export function numCell(text, { tone, bold = false } = {}) {
 }
 
 /** Edit and delete for one row. Was four copies of the same inline flexbox. */
+// ── Buttons inside generated markup ────────────────────
+//
+// Table cells are built as HTML strings, and the obvious way to make a button
+// in one do something is onclick="...". That works in `npm run dev` and is
+// silently dead in production: the site's Content-Security-Policy is
+// `script-src 'self'`, which refuses every inline handler. No error reaches
+// the page — the button simply does nothing — which is how the Edit and Delete
+// buttons on every table stayed broken without anyone being told.
+//
+// So a button carries its call as data, and ONE listener on the document runs
+// it. callAttrs() takes the same "window.__fn('a','b')" string the call sites
+// already had, so none of them needed rewriting.
+
+/** "window.__ptTxEdit('abc')" → data-call="__ptTxEdit" data-args='["abc"]' */
+export function callAttrs(call) {
+  const match = /^\s*window\.(__[A-Za-z0-9_$]+)\((.*)\)\s*;?\s*$/s.exec(String(call));
+  if (!match) throw new Error(`callAttrs: not a window.__handler(...) call: ${call}`);
+  const args = [...match[2].matchAll(/'((?:[^'\\]|\\.)*)'/g)].map(m => m[1].replace(/\\(.)/g, '$1'));
+  return `data-call="${match[1]}" data-args="${escapeHTML(JSON.stringify(args))}"`;
+}
+
+let callListenerInstalled = false;
+
+/** Install the one delegated listener. Safe to call more than once. */
+export function installCallListener(root = document) {
+  if (callListenerInstalled) return;
+  callListenerInstalled = true;
+  root.addEventListener('click', (event) => {
+    const el = event.target.closest?.('[data-call]');
+    if (!el || el.disabled) return;
+    // Only the app's own double-underscore handlers: markup can name a function
+    // to run, so it must not be able to name an arbitrary one.
+    const name = el.dataset.call;
+    const handler = /^__[A-Za-z0-9_$]+$/.test(name) ? window[name] : null;
+    if (typeof handler !== 'function') return;
+    let args = [];
+    try { args = JSON.parse(el.dataset.args || '[]'); } catch (_) { return; }
+    handler(...args);
+  });
+}
+
 export function rowActions(editCall, deleteCall, noun = 'row') {
   return `
     <div class="row-actions">
-      <button type="button" class="btn-icon" onclick="${editCall}"
+      <button type="button" class="btn-icon" ${callAttrs(editCall)}
               title="Edit ${noun}" aria-label="Edit ${noun}"><i class="fas fa-pencil"></i></button>
-      <button type="button" class="btn-icon is-danger" onclick="${deleteCall}"
+      <button type="button" class="btn-icon is-danger" ${callAttrs(deleteCall)}
               title="Delete ${noun}" aria-label="Delete ${noun}"><i class="fas fa-trash"></i></button>
     </div>`;
 }
