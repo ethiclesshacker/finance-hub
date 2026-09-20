@@ -722,3 +722,42 @@ Implement `fetchNew(account, cursor, options)` returning
 `{ messages, cursor, stats }` in the shape `src/ledger/email.js` expects, and
 register it in `ledger/connectors/index.js`. Extraction, normalization,
 deduplication, entity resolution, storage and the UI are unchanged.
+
+
+## Which way money went
+
+One rule decides whether an amount is spend, income or neither:
+`public.ledger_money_flow()` in `0017_money_flow.sql`, and its twin `moneyFlow()`
+in `src/ledger/summary.js`. Change one, change both. A test runs both over every
+combination of type, subtype and direction and fails if they disagree.
+
+| Counts as | What |
+|---|---|
+| Neither | Money between your own pockets: a self-transfer, or paying a card bill whose spends were already counted |
+| Spend | A purchase, or a transfer that left for good: a payment to a person, an insurance premium |
+| Income | Anything marked as a credit, or a transfer that is an arrival: credit, refund, interest, dividend, cashback, reward |
+
+`ledger_stats()`, `life_days()` and the daily digest all use it. Before it
+existed, the first and last called every transfer income, so moving money
+between your own accounts showed up as lakhs of "money in".
+
+A spend's category is, in order: the event's own category, the type of its note
+(`Food: …`), its subtype unless that is a payment method, its type. "Card
+transaction" is how you paid, not what you bought.
+
+## The review queue
+
+An event is `inferred` when its confidence is under 0.90. `ledger_auto_confirm()`
+(`0016_review_queue.sql`) runs after every ingest and confirms the ones that need
+no human:
+
+| Reason | Meaning |
+|---|---|
+| `read_by_rule` | Every source was read by a deterministic rule. A bank alert with no merchant name is a fact with a detail missing, not a guess |
+| `corroborated_by_sources` | Two or more independent sources agree |
+| `corroborated_by_user` | A points row you typed or confirmed describes it |
+
+Confidence is left as it was. What the language model read on its own stays in
+the queue, which is what its 0.88 cap is for. Every change is in the audit log as
+`event_auto_confirmed` with its reason, and `ledger_undo_auto_confirm(since)`
+puts them back.

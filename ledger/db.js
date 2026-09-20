@@ -93,6 +93,15 @@ export function syncCardPoints(userId) {
   return rpc('cc_sync_from_events', { p_user_id: userId });
 }
 
+/**
+ * Confirm inferred events that need no human: read by a deterministic rule,
+ * agreed by two sources, or backed by a points row the user typed. What a
+ * model read alone stays in the review queue. (0016_review_queue.sql)
+ */
+export function autoConfirm(userId) {
+  return rpc('ledger_auto_confirm', { p_user_id: userId });
+}
+
 /** The unified day objects (money, food, body, energy, activity) for a range of local dates. */
 export function lifeDays(userId, from, to) {
   return rpc('life_days', { p_from: from, p_to: to, p_user_id: userId });

@@ -13,7 +13,7 @@
 
 import { config, loadAccounts } from '../config.js';
 import { getConnector } from '../connectors/index.js';
-import { getCheckpoint, setCheckpoint, startRun, finishRun, resolveUserId, syncCardPoints } from '../db.js';
+import { getCheckpoint, setCheckpoint, startRun, finishRun, resolveUserId, syncCardPoints, autoConfirm } from '../db.js';
 import { runPipeline } from '../pipeline.js';
 
 export async function ingestEmail(options = {}) {
@@ -112,6 +112,14 @@ export async function ingestEmail(options = {}) {
       summary.card_points = await syncCardPoints(userId);
     } catch (err) {
       summary.card_points = { error: err.message };
+    }
+    // Keep the review queue to real questions: a bank alert is a fact, not
+    // something to ask "did this happen?" about. After the points sync, so a
+    // row that corroborates an event already exists.
+    try {
+      summary.auto_confirmed = await autoConfirm(userId);
+    } catch (err) {
+      summary.auto_confirmed = { error: err.message };
     }
   }
 
