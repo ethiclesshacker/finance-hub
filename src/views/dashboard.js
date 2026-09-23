@@ -3,11 +3,18 @@
 //
 // It composes rather than computes: net worth rows come from the same
 // fetcher the Net Worth screen uses, points arithmetic from points-math.js,
-// and the two charts from charts.js, so the figure here is always the figure
-// on the screen it summarises.
+// the day from life_days (the join Hermes reads), money direction from the
+// one rule in 0017, and the two charts from charts.js — so the figure here is
+// always the figure on the screen it summarises.
+//
+// Top to bottom it runs from what changes by the hour to what changes by the
+// month: what needs you, today's body, this month's spending, then net worth
+// and points. Every section past the header is optional; a source that has
+// not been set up removes its card rather than showing zeros.
 // ======================================================
 
 import * as ledger from '../ledger/api.js';
+import * as health from '../health/api.js';
 import { listEntries } from '../networth/api.js';
 import { listTransactions, listRedemptions } from '../points/api.js';
 import { EUR_INR_FALLBACK } from '../constants.js';
@@ -15,11 +22,12 @@ import * as settings from '../settings.js';
 import {
   formatINR, formatINRFull, formatPercent, destroyChart, fetchEURtoINR, escapeHTML,
   computeNet, computeAssets, computeLiquid, computeEmergencyFund,
-  renderKpiCards, bannerHTML,
+  renderKpiCards, bannerHTML, todayISO,
 } from '../utils.js';
 import { netWorthSeriesChart, allocationDoughnut, wireChartToggle } from '../charts.js';
 import { pointsSummary } from '../points-math.js';
-import { impliedSavingsRate } from '../finance.js';
+import { impliedSavingsRate, monthsBetween } from '../finance.js';
+import { shiftISO, formatHours, meanOf, latestOf } from '../health/summary.js';
 import { navigateTo } from '../router.js';
 
 let netWorthChart = null;
@@ -28,6 +36,9 @@ let netWorthData = [];
 let clockTimer = null;
 // A load that resolves after the user has left must not paint a dead DOM.
 let loadToken = 0;
+
+// A snapshot older than this is worth a nudge: the KPIs below all read it.
+const STALE_SNAPSHOT_DAYS = 45;
 
 export async function renderDashboard(container) {
   container.innerHTML = `
@@ -49,6 +60,12 @@ export async function renderDashboard(container) {
 
       <div id="dash-alert"></div>
 
+      <!-- Filled only with what applies; the card removes itself when nothing does. -->
+      <div class="chart-card dash-todo-card" id="dash-todo" hidden>
+        <div class="chart-title">Worth a look</div>
+        <ul class="dash-todo" id="dash-todo-list"></ul>
+      </div>
+
       <!-- KPIs -->
       <div class="kpi-grid" id="dashboard-kpis">
         ${Array(4).fill(0).map(() => `
@@ -56,6 +73,42 @@ export async function renderDashboard(container) {
             <div class="skeleton skeleton--kpi"></div>
           </div>
         `).join('')}
+      </div>
+
+      <!-- Today -->
+      <div class="chart-card" id="dash-today-card">
+        <div class="chart-header">
+          <div>
+            <div class="chart-title">Today</div>
+            <div class="chart-subtitle">Sleep, movement and food, from Apple Health and the ledger</div>
+          </div>
+          <button type="button" class="btn-sm btn-accent" data-goto="health">
+            Open Health <i class="fas fa-arrow-right" aria-hidden="true"></i>
+          </button>
+        </div>
+        <div class="points-strip" id="dash-today">
+          ${Array(4).fill(0).map(() => `
+            <div class="points-strip-item">
+              <div class="skeleton skeleton--stat"></div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+
+      <!-- This month -->
+      <div class="chart-card" id="dash-life-card">
+        <div class="chart-header">
+          <div>
+            <div class="chart-title">This month, actually</div>
+            <div class="chart-subtitle">Recorded personal spending, against what you budgeted</div>
+          </div>
+          <button type="button" class="btn-sm btn-accent" data-goto="ledger">
+            Open Life <i class="fas fa-arrow-right" aria-hidden="true"></i>
+          </button>
+        </div>
+        <div id="dash-life-strip">
+          <div class="skeleton skeleton--strip"></div>
+        </div>
       </div>
 
       <!-- Charts -->
@@ -79,28 +132,12 @@ export async function renderDashboard(container) {
           <div class="chart-header">
             <div>
               <div class="chart-title">Asset Allocation</div>
-              <div class="chart-subtitle">Latest snapshot</div>
+              <div class="chart-subtitle" id="dash-alloc-sub">Latest snapshot</div>
             </div>
           </div>
           <div class="chart-canvas-wrap">
             <canvas id="dash-alloc-chart"></canvas>
           </div>
-        </div>
-      </div>
-
-      <!-- Life strip -->
-      <div class="chart-card">
-        <div class="chart-header">
-          <div>
-            <div class="chart-title">This month, actually</div>
-            <div class="chart-subtitle">Recorded spending, against what you budgeted</div>
-          </div>
-          <button type="button" class="btn-sm btn-accent" id="dash-goto-ledger">
-            Open Life <i class="fas fa-arrow-right" aria-hidden="true"></i>
-          </button>
-        </div>
-        <div id="dash-life-strip">
-          <div class="skeleton skeleton--strip"></div>
         </div>
       </div>
 
@@ -111,7 +148,7 @@ export async function renderDashboard(container) {
             <div class="chart-title">Points &amp; Rewards</div>
             <div class="chart-subtitle">HSBC TravelOne <span id="fx-badge"></span></div>
           </div>
-          <button type="button" class="btn-sm btn-accent" id="dash-goto-points">
+          <button type="button" class="btn-sm btn-accent" data-goto="points">
             View details <i class="fas fa-arrow-right" aria-hidden="true"></i>
           </button>
         </div>
@@ -135,8 +172,12 @@ export async function renderDashboard(container) {
 
   wireChartToggle('nw-chart-line', 'nw-chart-bar', type => buildNetWorthChart(netWorthData, type));
 
-  document.getElementById('dash-goto-points')?.addEventListener('click', () => navigateTo('points'));
-  document.getElementById('dash-goto-ledger')?.addEventListener('click', () => navigateTo('ledger'));
+  // One delegated handler for every "go to that screen" button, including the
+  // ones the to-do list draws later.
+  container.querySelector('.page-body').addEventListener('click', e => {
+    const target = e.target.closest('[data-goto]');
+    if (target) navigateTo(target.dataset.goto);
+  });
 
   await loadDashboardData();
 }
@@ -190,12 +231,41 @@ function showEmptyState() {
   document.getElementById('dash-goto-nw')?.addEventListener('click', () => navigateTo('networth'));
 }
 
+function removeCard(id) {
+  document.getElementById(id)?.remove();
+}
+
 async function loadDashboardData() {
   const token = ++loadToken;
+  const todo = new TodoList(token);
 
-  // The ledger is optional: the dashboard predates it and has to keep working
-  // when the migrations have not been run or nothing has been ingested yet.
-  renderLifeStrip(token).catch(() => { if (token === loadToken) hideLifeStrip(); });
+  // The ledger and Apple Health are optional: the dashboard predates both and
+  // has to keep working when their migrations have not been run or nothing
+  // has arrived yet. Each removes its own card on failure.
+  renderDayAndMonth(token)
+    .catch(err => {
+      console.warn('[dashboard] life_days:', err?.message || err);
+      if (token === loadToken) { removeCard('dash-today-card'); removeCard('dash-life-card'); }
+    });
+  ledger.reviewQueue(50)
+    .then(rows => {
+      const n = Array.isArray(rows) ? rows.length : 0;
+      if (n) todo.add('review', {
+        icon: 'fa-inbox', goto: 'ledger', action: 'Review',
+        text: `${n}${n >= 50 ? '+' : ''} ledger event${n === 1 ? '' : 's'} waiting for review`,
+      });
+    })
+    .catch(() => {});
+
+  for (const [key, label, readers] of [
+    ['monthly_expenses', 'monthly budget', 'runway, FI target and this month’s pace read it'],
+    ['monthly_net_income', 'monthly income', 'the savings rate reads it'],
+  ]) {
+    if (!settings.isSet(key)) todo.add(key, {
+      icon: 'fa-sliders', goto: 'settings', action: 'Set it',
+      text: `Your ${label} is still the ${formatINRFull(settings.get(key))} placeholder, and ${readers}`,
+    });
+  }
 
   let entries, transactions, redemptions, eurRate;
   try {
@@ -238,10 +308,27 @@ async function loadDashboardData() {
     changeEl.textContent = entries.length ? 'First snapshot' : 'No data yet';
   }
 
+  // Everything below the hero reads the latest snapshot, so say how old it is.
+  if (latest?.date) {
+    const ageDays = Math.round(monthsBetween(String(latest.date).slice(0, 10), todayISO()) * 30.4375);
+    const allocSub = document.getElementById('dash-alloc-sub');
+    if (allocSub) allocSub.textContent = `Snapshot of ${formatDay(latest.date)}`;
+    if (ageDays > STALE_SNAPSHOT_DAYS) todo.add('snapshot', {
+      icon: 'fa-camera', goto: 'networth', action: 'Update',
+      text: `Last net worth snapshot was ${formatAge(ageDays)} ago (${formatDay(latest.date)})`,
+    });
+  }
+
   // ── Points ────────────────────────────────────────────
   const pointsPerEur = settings.get('points_per_eur');
   const pts = pointsSummary(transactions, redemptions, { pointsPerEur, eurRate });
   const rewardTarget = settings.get('cc_reward_target_rate');
+  // Rows made from card alerts arrive as a guess until you look at them.
+  const assumed = transactions.filter(t => t.basis === 'assumed').length;
+  if (assumed) todo.add('points', {
+    icon: 'fa-credit-card', goto: 'points', action: 'Confirm',
+    text: `${assumed} card spend${assumed === 1 ? '' : 's'} labelled from a rule, not yet confirmed`,
+  });
 
   const fxBadge = document.getElementById('fx-badge');
   if (fxBadge) fxBadge.textContent = `· 1 EUR = ₹${eurRate.toFixed(0)}`;
@@ -298,43 +385,32 @@ async function loadDashboardData() {
   ]);
 
   // ── Points Strip ──────────────────────────────────────
-  const strip = document.getElementById('points-strip');
-  if (strip) {
-    const items = [
-      {
-        label: 'Accrued',
-        value: Math.round(pts.totalAccrued).toLocaleString('en-IN') + ' pts',
-        sub: `${transactions.length} transactions`,
-        tone: 'success',
-      },
-      {
-        label: 'Redeemed',
-        value: Math.round(pts.totalRedeemed).toLocaleString('en-IN') + ' pts',
-        sub: `Value: ${formatINRFull(pts.totalRdValue)}`,
-        tone: 'danger',
-      },
-      {
-        label: 'Balance value',
-        value: formatINRFull(pts.balanceINR),
-        sub: `${pts.balanceEUR.toFixed(0)} EUR`,
-        tone: 'accent',
-      },
-      {
-        label: 'Reward rate',
-        value: formatPercent(pts.rewardRate),
-        sub: pts.rewardRate >= rewardTarget ? `Above the ${rewardTarget}% target` : `Target: above ${rewardTarget}%`,
-        tone: pts.rewardRate >= rewardTarget ? 'success' : 'warning',
-      },
-    ];
-
-    strip.innerHTML = items.map((item, i) => `
-      <div class="points-strip-item ${i < items.length - 1 ? 'has-divider' : ''}">
-        <div class="psi-label">${escapeHTML(item.label)}</div>
-        <div class="psi-value mono is-${item.tone}">${escapeHTML(item.value)}</div>
-        <div class="psi-sub">${escapeHTML(item.sub)}</div>
-      </div>
-    `).join('');
-  }
+  renderStrip(document.getElementById('points-strip'), [
+    {
+      label: 'Accrued',
+      value: Math.round(pts.totalAccrued).toLocaleString('en-IN') + ' pts',
+      sub: `${transactions.length} transactions`,
+      tone: 'success',
+    },
+    {
+      label: 'Redeemed',
+      value: Math.round(pts.totalRedeemed).toLocaleString('en-IN') + ' pts',
+      sub: `Value: ${formatINRFull(pts.totalRdValue)}`,
+      tone: 'danger',
+    },
+    {
+      label: 'Balance value',
+      value: formatINRFull(pts.balanceINR),
+      sub: `${pts.balanceEUR.toFixed(0)} EUR`,
+      tone: 'accent',
+    },
+    {
+      label: 'Reward rate',
+      value: formatPercent(pts.rewardRate),
+      sub: pts.rewardRate >= rewardTarget ? `Above the ${rewardTarget}% target` : `Target: above ${rewardTarget}%`,
+      tone: pts.rewardRate >= rewardTarget ? 'success' : 'warning',
+    },
+  ]);
 
   buildNetWorthChart(entries, 'line');
   allocationChart = destroyChart(allocationChart);
@@ -346,85 +422,233 @@ function buildNetWorthChart(entries, type = 'line') {
   netWorthChart = netWorthSeriesChart(document.getElementById('dash-nw-chart'), entries, type);
 }
 
+/** Four label / figure / note cells, shared by the Today and Points cards. */
+function renderStrip(el, items) {
+  if (!el) return;
+  el.innerHTML = items.map((item, i) => `
+    <div class="points-strip-item ${i < items.length - 1 ? 'has-divider' : ''}">
+      <div class="psi-label">${escapeHTML(item.label)}</div>
+      <div class="psi-value mono ${item.tone ? `is-${item.tone}` : ''}">${escapeHTML(item.value)}</div>
+      <div class="psi-sub">${escapeHTML(item.sub)}</div>
+    </div>
+  `).join('');
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** "14 Sep 2026" from an ISO date. */
+function formatDay(iso) {
+  const [y, m, d] = String(iso).slice(0, 10).split('-').map(Number);
+  return `${d} ${MONTHS[m - 1]} ${y}`;
+}
+
+function formatAge(days) {
+  if (days < 60) return `${days} days`;
+  return `${Math.round(days / 30.44)} months`;
+}
+
 // ======================================================
-// This month, actually
+// Worth a look
+//
+// The things only you can close: events the ledger could not read with
+// confidence, card spends labelled by a rule, a stale snapshot, a setting
+// still on its placeholder. Items arrive from several loads at different
+// times, so the list is keyed and redrawn on each arrival.
+// ======================================================
+
+class TodoList {
+  constructor(token) {
+    this.token = token;
+    this.items = new Map();
+    this.draw();
+  }
+
+  add(key, item) {
+    if (this.token !== loadToken) return;
+    this.items.set(key, item);
+    this.draw();
+  }
+
+  draw() {
+    const card = document.getElementById('dash-todo');
+    const list = document.getElementById('dash-todo-list');
+    if (!card || !list) return;
+    card.hidden = this.items.size === 0;
+    list.innerHTML = [...this.items.values()].map(item => `
+      <li class="dash-todo-item">
+        <i class="fas ${item.icon}" aria-hidden="true"></i>
+        <span class="dash-todo-text">${escapeHTML(item.text)}</span>
+        <button type="button" class="btn-sm btn-ghost" data-goto="${escapeHTML(item.goto)}">${escapeHTML(item.action)}</button>
+      </li>
+    `).join('');
+  }
+}
+
+// ======================================================
+// Today and this month — both from life_days
+//
+// One call covers the month so far and the week before today, whichever
+// starts earlier: the day strip needs a week for its averages, the month
+// strip needs every day since the 1st.
+// ======================================================
+
+async function renderDayAndMonth(token) {
+  const today = todayISO();
+  const monthStart = `${today.slice(0, 8)}01`;
+  const weekStart = shiftISO(today, -7);
+  const from = weekStart < monthStart ? weekStart : monthStart;
+
+  const [days, stats] = await Promise.all([
+    health.days(from, today),
+    ledger.stats(new Date(`${monthStart}T00:00:00`).toISOString(), null).catch(() => null),
+  ]);
+  if (token !== loadToken) return;
+
+  const list = Array.isArray(days) ? days : [];
+  renderToday(list.filter(d => d.day >= weekStart), today);
+  renderMonth(list.filter(d => d.day >= monthStart), stats, today);
+}
+
+// ── Today ────────────────────────────────────────────────
+
+function renderToday(days, today) {
+  const el = document.getElementById('dash-today');
+  if (!el) return;
+
+  // life_days nests body fields; the Health helpers read them flat.
+  const flat = days.map(d => ({ day: d.day, ...(d.body || {}) }));
+  const earlier = flat.filter(d => d.day !== today);
+  const todayRow = days.find(d => d.day === today) || {};
+  const yesterday = days.find(d => d.day === shiftISO(today, -1)) || {};
+
+  const hasBody = flat.some(d => Object.keys(d).length > 1);
+  const hasFood = days.some(d => d.food);
+  if (!hasBody && !hasFood) { removeCard('dash-today-card'); return; }
+
+  // A night is dated by the morning it ended, so last night is today's row
+  // once the Watch has synced it — and yesterday's until then.
+  const lastNight = latestOf(flat.filter(d => d.day >= shiftISO(today, -1)), 'sleep_hours');
+  const sleepAvg = meanOf(earlier, 'sleep_hours');
+
+  const steps = todayRow.body?.steps ?? null;
+  const stepsAvg = meanOf(earlier, 'steps');
+
+  const food = todayRow.food;
+  const target = Number(todayRow.energy?.target_kcal ?? settings.get('food_kcal_target')) || 0;
+  // Only a complete day has an honest balance; see 0011 on partial logs.
+  const balance = yesterday.energy?.complete ? yesterday.energy.balance_kcal : null;
+
+  const weight = latestOf(flat, 'weight_kg');
+  const weekAgo = flat.find(d => d.weight_kg != null && d.day < (weight?.day || ''));
+  const weightDelta = weight && weekAgo ? weight.value - Number(weekAgo.weight_kg) : null;
+
+  const num = n => Math.round(n).toLocaleString('en-IN');
+
+  renderStrip(el, [
+    {
+      label: 'Sleep',
+      value: lastNight ? formatHours(lastNight.value) : '—',
+      sub: lastNight
+        ? `${lastNight.day === today ? 'Last night' : 'Night before'}${sleepAvg != null ? ` · 7-day avg ${formatHours(sleepAvg)}` : ''}`
+        : 'No night synced yet',
+    },
+    {
+      label: 'Steps',
+      value: steps != null ? num(steps) : '—',
+      sub: stepsAvg != null ? `So far · 7-day avg ${num(stepsAvg)}` : 'So far today',
+    },
+    {
+      label: 'Eaten',
+      value: food?.eaten_kcal != null ? `${num(food.eaten_kcal)} kcal` : '—',
+      sub: [
+        target ? `of ${num(target)}` : null,
+        food?.protein_g != null ? `${food.protein_g} g protein` : null,
+        balance != null ? `yesterday ${balance > 0 ? '+' : '−'}${num(Math.abs(balance))} net` : null,
+      ].filter(Boolean).join(' · ') || 'Nothing logged yet',
+    },
+    {
+      label: 'Weight',
+      value: weight ? `${weight.value.toFixed(1)} kg` : '—',
+      sub: weight
+        ? `${weight.day === today ? 'Today' : formatDay(weight.day).slice(0, -5)}${weightDelta != null ? ` · ${weightDelta > 0 ? '+' : weightDelta < 0 ? '−' : '±'}${Math.abs(weightDelta).toFixed(1)} this week` : ''}`
+        : 'Not measured this week',
+    },
+  ]);
+}
+
+// ── This month, actually ─────────────────────────────────
 //
 // Every other number on this dashboard — savings rate, runway, time to FI —
 // is derived from `monthly_expenses`, a figure typed into Settings once. The
 // ledger knows what was actually spent. Putting the two side by side is the
 // only place in the app where the plan meets the record, which makes it worth
 // the strip it occupies.
-// ======================================================
+//
+// Work spend (a points row ticked as work) is reimbursed, so it is shown but
+// not measured against a personal budget. Money moved between your own
+// accounts is neither spend nor income (0017) and is not here at all.
 
-const LIFE_CATEGORY_LABELS = {
-  food_delivery: 'Food delivery', card_transaction: 'Card', upi_payment: 'UPI',
-  groceries: 'Groceries', utilities: 'Utilities', restaurant: 'Restaurants',
-  transport: 'Transport', shopping: 'Shopping', uncategorised: 'Uncategorised',
-};
-
-function hideLifeStrip() {
-  const strip = document.getElementById('dash-life-strip');
-  strip?.closest('.chart-card')?.remove();
-}
-
-async function renderLifeStrip(token) {
+function renderMonth(days, stats, today) {
   const strip = document.getElementById('dash-life-strip');
   if (!strip) return;
 
-  const now = new Date();
-  const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-  const from = new Date(`${monthStart}T00:00:00`).toISOString();
+  let spend = 0, work = 0, events = 0;
+  for (const d of days) {
+    events += Number(d.events) || 0;
+    spend += Number(d.money?.spend) || 0;
+    work += Number(d.money?.work_spend) || 0;
+  }
+  if (!events) { removeCard('dash-life-card'); return; }
+  const personal = Math.max(spend - work, 0);
 
-  const stats = await ledger.stats(from, null);
-  if (token !== loadToken || !strip.isConnected) return;
-
-  const spent = Number(stats?.spend?.total) || 0;
   const budget = settings.get('monthly_expenses');
-  const eventCount = Number(stats?.event_count) || 0;
-
-  if (!eventCount) { hideLifeStrip(); return; }
+  const budgetIsReal = settings.isSet('monthly_expenses');
 
   // Pace, not just position: a third of the way through the month, half the
   // budget gone is the thing worth knowing.
-  const daysIn = now.getDate();
-  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  const expected = budget * (daysIn / daysInMonth);
-  const overPace = expected > 0 && spent > expected * 1.1;
-  const pct = budget > 0 ? Math.min((spent / budget) * 100, 100) : 0;
+  const [y, m, dayOfMonth] = today.split('-').map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const expected = budget * (dayOfMonth / daysInMonth);
+  const overPace = expected > 0 && personal > expected * 1.1;
+  const pct = budget > 0 ? Math.min((personal / budget) * 100, 100) : 0;
 
   const categories = Object.entries(stats?.spend?.by_category || {})
-    .sort((a, b) => b[1] - a[1]).slice(0, 4);
+    .sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  const note = !budgetIsReal
+    ? `The budget is a placeholder, not yours — set it in Settings and this line means something.`
+    : overPace
+      ? `Ahead of pace — ${formatINRFull(personal - expected)} above where day ${dayOfMonth} would put you.`
+      : `On pace. Day ${dayOfMonth} of ${daysInMonth}.`;
 
   strip.innerHTML = `
     <div class="life-strip">
       <div class="life-spend">
-        <div class="life-spend-value mono">${escapeHTML(formatINRFull(spent))}</div>
+        <div class="life-spend-value mono">${escapeHTML(formatINRFull(personal))}</div>
         <div class="life-spend-sub">
-          recorded across ${eventCount} event${eventCount === 1 ? '' : 's'} ·
-          budget ${escapeHTML(formatINRFull(budget))}
+          personal, across ${events} event${events === 1 ? '' : 's'}
+          ${work ? ` · plus ${escapeHTML(formatINRFull(work))} work` : ''}
+          · budget ${escapeHTML(formatINRFull(budget))}${budgetIsReal ? '' : ' (default)'}
         </div>
         <div class="progress-wrap life-bar">
-          <div class="progress-bar ${overPace ? 'is-over' : ''}" style="width:${pct.toFixed(1)}%"></div>
-          <span class="life-pace" style="left:${Math.min((daysIn / daysInMonth) * 100, 100).toFixed(1)}%"
-                title="Where the month is: day ${daysIn} of ${daysInMonth}"></span>
+          <div class="progress-bar ${overPace && budgetIsReal ? 'is-over' : ''}" style="width:${pct.toFixed(1)}%"></div>
+          <span class="life-pace" style="left:${Math.min((dayOfMonth / daysInMonth) * 100, 100).toFixed(1)}%"
+                title="Where the month is: day ${dayOfMonth} of ${daysInMonth}"></span>
         </div>
-        <div class="life-spend-note ${overPace ? 'is-over' : ''}">
-          ${overPace
-            ? `Ahead of pace — ${escapeHTML(formatINRFull(spent - expected))} above where day ${daysIn} would put you.`
-            : `On pace. Day ${daysIn} of ${daysInMonth}.`}
-        </div>
+        <div class="life-spend-note ${overPace && budgetIsReal ? 'is-over' : ''}">${escapeHTML(note)}</div>
       </div>
       <div class="life-cats">
         ${categories.length ? categories.map(([key, value]) => `
           <div class="life-cat">
-            <span class="life-cat-label">${escapeHTML(LIFE_CATEGORY_LABELS[key] || key.replace(/_/g, ' '))}</span>
+            <span class="life-cat-label">${escapeHTML(key.replace(/_/g, ' '))}</span>
             <span class="life-cat-value mono">${escapeHTML(formatINRFull(value))}</span>
           </div>
         `).join('') : '<div class="life-cat"><span class="life-cat-label">No categorised spending yet</span></div>'}
       </div>
     </div>
     <p class="life-caveat">
-      Only what reached your inbox. Cash and anything unemailed is not here.
+      Only what reached your inbox or was told to Hermes. Cash and anything unrecorded is not here;
+      categories include work spend.
     </p>
   `;
 }

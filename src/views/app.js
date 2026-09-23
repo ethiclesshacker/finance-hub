@@ -71,6 +71,8 @@ export function renderApp(session) {
 
         <div class="sidebar-nav">
           ${NAV_ITEMS.map(item => `
+            ${item.group !== undefined ? `
+              <div class="nav-group" ${item.group ? '' : 'aria-hidden="true"'}>${escapeHTML(item.group)}</div>` : ''}
             <button
               type="button"
               class="nav-item ${item.id === 'dashboard' ? 'active' : ''}"

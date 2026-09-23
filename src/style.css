@@ -538,6 +538,20 @@ input, select, textarea {
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
+/* A group heading in the sidebar. An empty one (above Settings) is only the
+   rule, so the last item reads as apart from the screens without a name. */
+.nav-group {
+  margin: var(--sp-4) var(--sp-3) var(--sp-1);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--text-muted);
+}
+.nav-group:empty { padding-top: 0; margin-bottom: var(--sp-3); }
+
 .nav-item i {
   width: 18px;
   text-align: center;
@@ -624,6 +638,8 @@ input, select, textarea {
 #app-shell.is-rail .sidebar-logo-names,
 #app-shell.is-rail .nav-item-label,
 #app-shell.is-rail .user-info { display: none; }
+/* In the rail a heading has no room; its rule alone still marks the group. */
+#app-shell.is-rail .nav-group { font-size: 0; padding-top: 0; margin: var(--sp-3) var(--sp-2); }
 #app-shell.is-rail .sidebar-nav { padding-inline: var(--sp-2); }
 /* In the rail the active item is a tile, not an edge bar — a 3px rule against
    the window edge is not legible as "you are here" once the label is gone. */
@@ -649,6 +665,8 @@ input, select, textarea {
   #app-shell.is-rail .sidebar-logo-names,
   #app-shell.is-rail .nav-item-label,
   #app-shell.is-rail .user-info { display: block; }
+  #app-shell.is-rail .nav-group { font-size: var(--fs-xs); padding-top: var(--sp-3); margin: var(--sp-4) var(--sp-3) var(--sp-1); }
+  #app-shell.is-rail .nav-group:empty { padding-top: 0; margin-bottom: var(--sp-3); }
   #app-shell.is-rail .sign-out-btn { display: grid; }
   #app-shell.is-rail .nav-item,
   #app-shell.is-rail .user-profile,
@@ -1951,6 +1969,22 @@ input, select, textarea {
   .fab { bottom: var(--sp-4); right: var(--sp-4); }
   .toast { left: var(--sp-4); right: var(--sp-4); bottom: var(--sp-4); }
 }
+
+/* ---------- Dashboard: worth a look ----------
+   Only what you can close, one line each, with the screen that closes it. */
+.dash-todo { list-style: none; margin: var(--sp-3) 0 0; padding: 0; }
+.dash-todo-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+.dash-todo-item + .dash-todo-item { border-top: 1px solid var(--border); }
+.dash-todo-item > i { width: 18px; text-align: center; color: var(--warning); flex-shrink: 0; }
+.dash-todo-text { flex: 1; min-width: 0; }
+.dash-todo-item .btn-sm { flex-shrink: 0; }
 
 /* ============================================================
    Dashboard banners — error and empty states
