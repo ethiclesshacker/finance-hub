@@ -62,6 +62,8 @@ npm run ledger:ingest -- --backfill-days 30   # rescan a window, ignoring the ch
 npm run ledger:summarize -- --period day
 npm run ledger:costs                  # what the model has cost, from a local ledger
 npm run ledger:tool -- search_events '{"query":"amazon","date_range":"last 30 days"}'
+npm run ledger:purge                  # drop old cached snippets, close stuck runs (also nightly, after the summary)
+npm run ledger:tools-manifest         # regenerate docs/hermes-tools.json from the tool registry
 ```
 
 Every billable call is recorded locally before its result is used — failures
@@ -115,6 +117,10 @@ Run the migrations in `supabase/migrations/` in order, via the Supabase SQL edit
 - `0006_stated_calories.sql` — replaces the rollup functions: a calorie count stated on a line item (`kcal`) outranks the dictionary.
 - `0007_indb_source.sql` — registers `indb` (Anuvaad Indian Nutrient Databank, vegetarian subset) as a resolver source, ranked above FDC and below a printed label.
 - `0008_food_merge.sql` — `food_merge_items`: fold one dish spelling into another, rewriting past meals so the ranking and the calories stop counting it twice. Driven from `/#dishes`.
+- `0009`–`0017` — Apple Health (`docs/health-sync.md`), the life API, card points from the ledger (`docs/card-points.md`), entity aliases, the review queue and money flow. Several replace functions defined earlier; each earlier file now says which.
+- `0018_cleanup.sql` — the ownership guard that actually guards (the old one passed every caller inside `SECURITY DEFINER`, and passed anon by returning NULL), anon revoked from the card tables and food functions, dead objects dropped, the snippet purge extended to close stuck runs, and bank spellings of merchants folded into the receipt's entity.
+
+There is no migration history in the project; apply a file with `npx supabase@2 db query --linked --project-ref <ref> -f supabase/migrations/<file>.sql`, then `-f supabase/checks/rls_audit.sql`.
 
 `supabase/checks/rls_audit.sql` is a read-only audit: it reports whether RLS is enabled, whether every command is owner-scoped, which commands have no policy, and whether any row has a null `user_id`. Run it after any policy change.
 

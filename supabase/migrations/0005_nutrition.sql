@@ -30,6 +30,13 @@
 -- Run order: after 0004_ledger_api.sql.
 -- ============================================================
 
+-- Superseded since (the current definition lives in the later file):
+--   food_event_nutrition    → 0006_stated_calories.sql (stated kcal outranks the dictionary)
+--   food_coverage           → 0006_stated_calories.sql
+--   food_source_rank        → 0007_indb_source.sql     (adds the 'indb' rung)
+-- Re-running this file on its own would put the old bodies back; run 0006 and
+-- 0007 again after it.
+
 
 -- ────────────────────────────────────────────────────────────
 -- food_items — the dish dictionary

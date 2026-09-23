@@ -11,7 +11,7 @@ supabase/functions/healthsync     validate size, shape, finite numbers, dates
    │  rpc public.health_ingest(token_hash, device, version, payload)
    ▼
 health.metrics · health.workouts · health.sync_batches · health.tombstones
-   └─ views: health.daily_totals · health.sleep_nights
+   └─ rollups: health.daily_cumulative() · health.daily_discrete() · health.nights()  (0010, 0011)
 ```
 
 The app is a patched private build of `megabyte0x/healthykit`, kept in
@@ -91,8 +91,10 @@ person wants. Everything reads **rollups**, from `0010_health_api.sql`:
 | `health_series(type, from, to)` | One type per day. A total for cumulative types, min/avg/max/latest for readings |
 | `health_intraday(type, day, minutes)` | One type across the hours of one day |
 | `health_sleep(from, to)` | One object per night, with stage minutes and local bed and wake times |
-| `health_workouts(from, to)` | The workouts |
 | `health_catalog()` | Which types have data, and when the phone last synced |
+
+Workouts have no function of their own: `life_activity()` (below) is the
+workout feed, for the browser and for Hermes alike.
 
 Cumulative types are summed from **one source per day**, the one with the
 largest total, so the Watch and the phone are never added together.

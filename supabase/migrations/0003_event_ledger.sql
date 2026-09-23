@@ -21,6 +21,11 @@
 -- carries the ingestion/query functions Hermes and the jobs call.
 -- ============================================================
 
+-- Superseded since: public.derived_insights (table, index, policy) was dropped
+-- by 0018_cleanup.sql — nothing ever wrote to it. A re-run of this file will
+-- recreate it and its grant loop below then applies to it again; drop it once
+-- more with 0018 if you do.
+
 -- pg_trgm powers fuzzy entity matching and the ILIKE fallback in search.
 -- Supabase keeps extensions in their own schema; every function below sets an
 -- explicit search_path that includes it.

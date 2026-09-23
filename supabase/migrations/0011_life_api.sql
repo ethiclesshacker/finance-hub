@@ -39,6 +39,13 @@
 -- 0014), so if this file is ever re-run on its own, run 0014 again after it.
 -- ============================================================
 
+-- Superseded since (the current definition lives in the later file):
+--   finance_card_points     → 0012_card_points.sql, then 0014_card_work_flag.sql
+--   cc_work_spend           → 0012_card_points.sql, then 0014_card_work_flag.sql
+-- (health.daily_discrete defined here replaces 0010's; nothing later replaces
+-- this one.) Re-running this file on its own would put the old bodies back;
+-- run 0014 again after it.
+
 
 -- ────────────────────────────────────────────────────────────
 -- 1. Finance

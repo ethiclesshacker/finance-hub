@@ -15,6 +15,14 @@
 -- Requires 0003_event_ledger.sql.
 -- ============================================================
 
+-- Superseded since (the current definition lives in the later file):
+--   ledger_resolve_entity   → 0015_entity_aliases.sql  (metadata.aliases rung)
+--   ledger_stats            → 0017_money_flow.sql      (one money-flow rule)
+--   ledger_can_act_as       → 0018_cleanup.sql         (JWT role, not current_user)
+--   ledger_purge_snippets   → 0018_cleanup.sql         (returns jsonb; run hygiene)
+-- Re-running this file on its own would put the old bodies back; run those
+-- files again after it.
+
 -- ────────────────────────────────────────────────────────────
 -- Guards and small helpers
 -- ────────────────────────────────────────────────────────────

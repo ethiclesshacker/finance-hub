@@ -35,6 +35,11 @@
 -- Run order: after 0008_food_merge.sql.
 -- ============================================================
 
+-- Superseded since: the two ad hoc views at the end of this file,
+-- health.daily_totals and health.sleep_nights, were dropped by 0018_cleanup.sql;
+-- health.daily_cumulative() and health.nights() in 0010 are their replacements.
+-- A re-run of this file recreates them, harmlessly.
+
 
 create schema if not exists health;
 

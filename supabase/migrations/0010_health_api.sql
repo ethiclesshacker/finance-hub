@@ -41,6 +41,13 @@
 -- Run order: after 0009_health.sql. Additive; safe to re-run.
 -- ============================================================
 
+-- Superseded since (the current definition lives in the later file):
+--   health.daily_discrete   → 0011_life_api.sql   (weight is the union of both stores)
+--   health_workouts         → dropped by 0018_cleanup.sql; life_activity() (0011)
+--                             is what the browser and Hermes read
+-- Re-running this file on its own would put the old body back and recreate
+-- health_workouts; run 0011 and 0018 again after it.
+
 
 -- ────────────────────────────────────────────────────────────
 -- Who is asking
