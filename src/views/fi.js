@@ -1,11 +1,12 @@
 import { Chart } from '../vendor.js';
-import { supabase } from '../supabase.js';
+import { listEntries } from '../networth/api.js';
 import * as settings from '../settings.js';
 import {
-  formatINR, formatINRFull, formatPercent, destroyChart, makeCopyable,
-  escapeHTML, showToast, parseNum, CHART_COLORS, computeNet,
+  formatINR, formatINRFull, formatPercent, destroyChart,
+  escapeHTML, showToast, parseNum, withBusy, bannerHTML, CHART_COLORS, computeNet,
   renderKpiCards,
 } from '../utils.js';
+import { inrTicks, verticalGradient, GRID_LINE } from '../charts.js';
 import {
   impliedSavingsRate, monthsToTarget, projectSeries,
   coastFINumber, addMonthsISO, formatDuration,
@@ -14,6 +15,8 @@ import { navigateTo } from '../router.js';
 
 let entries = [];
 let projectionChart = null;
+// A load that resolves after the user has left must not paint a dead DOM.
+let loadToken = 0;
 
 // Scenario state, module-level so it survives navigating away and back.
 // Sliding only changes the projection; "Save as my assumptions" writes it.
@@ -46,7 +49,7 @@ export async function renderFI(container) {
       </button>
     </div>
 
-    <div class="page-body">
+    <div class="page-body card-stack">
       <div id="fi-alert"></div>
 
       <div class="kpi-grid kpi-grid--3col" id="fi-kpi-grid">
@@ -55,7 +58,7 @@ export async function renderFI(container) {
         `).join('')}
       </div>
 
-      <div class="chart-card" style="margin-top:1rem">
+      <div class="chart-card">
         <div class="chart-header">
           <div>
             <div class="chart-title">Path to Financial Independence</div>
@@ -73,14 +76,14 @@ export async function renderFI(container) {
 
       <div class="fi-grid">
         <div class="chart-card">
-          <div class="chart-header" style="margin-bottom:0.75rem">
+          <div class="chart-header">
             <div>
               <div class="chart-title">Scenario</div>
               <div class="chart-subtitle">Drag to see what changes. Nothing is saved until you save it.</div>
             </div>
           </div>
           <div class="fi-sliders" id="fi-sliders"></div>
-          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;margin-top:1rem">
+          <div class="fi-actions">
             <button type="button" class="btn-sm btn-accent" id="fi-save-scenario">Save as my assumptions</button>
             <button type="button" class="btn-sm btn-ghost" id="fi-reset-scenario">Reset to saved</button>
             <span class="fi-dirty" id="fi-dirty" role="status"></span>
@@ -88,7 +91,7 @@ export async function renderFI(container) {
         </div>
 
         <div class="chart-card">
-          <div class="chart-header" style="margin-bottom:0.75rem">
+          <div class="chart-header">
             <div>
               <div class="chart-title">Milestones</div>
               <div class="chart-subtitle">At the current scenario</div>
@@ -102,11 +105,15 @@ export async function renderFI(container) {
 
   document.getElementById('fi-settings-btn')?.addEventListener('click', () => navigateTo('settings'));
   document.getElementById('fi-real-terms')?.addEventListener('change', e => {
+    // With no snapshots there is no scenario yet — the checkbox is inert
+    // rather than a TypeError.
+    if (!scenario) return;
     scenario.realTerms = e.target.checked;
     recompute();
   });
   document.getElementById('fi-save-scenario')?.addEventListener('click', saveScenario);
   document.getElementById('fi-reset-scenario')?.addEventListener('click', () => {
+    if (!entries.length) return;
     resetScenario();
     renderSliders();
     recompute();
@@ -115,16 +122,22 @@ export async function renderFI(container) {
   await loadData();
 }
 
+export { renderFI as render };
+
+/** Release the chart before the router replaces the DOM. The scenario is kept on purpose. */
+export function unmount() {
+  loadToken++;
+  projectionChart = destroyChart(projectionChart);
+}
+
 function showAlert(message, kind = 'error') {
   const el = document.getElementById('fi-alert');
   if (!el) return;
-  el.innerHTML = `
-    <div class="dash-banner dash-banner--${kind === 'error' ? 'error' : 'empty'}" role="${kind === 'error' ? 'alert' : 'status'}">
-      <i class="fas fa-${kind === 'error' ? 'triangle-exclamation' : 'seedling'}"></i>
-      <div><strong>${escapeHTML(message)}</strong></div>
-      ${kind === 'empty' ? '<button type="button" class="btn-sm btn-accent" id="fi-goto-nw">Add snapshot</button>' : ''}
-    </div>
-  `;
+  el.innerHTML = bannerHTML({
+    tone: kind === 'error' ? 'error' : 'empty',
+    title: message,
+    action: kind === 'empty' ? { id: 'fi-goto-nw', label: 'Add snapshot' } : null,
+  });
   document.getElementById('fi-goto-nw')?.addEventListener('click', () => navigateTo('networth'));
 }
 
@@ -154,10 +167,15 @@ function syncScenario() {
 }
 
 async function loadData() {
-  const { data, error } = await supabase
-    .from('net_worth_entries').select('*').order('date', { ascending: true });
-
-  if (error) { showAlert(`Couldn't load snapshots: ${error.message}`); return; }
+  const token = ++loadToken;
+  let data;
+  try {
+    data = await listEntries();
+  } catch (err) {
+    if (token === loadToken) showAlert(`Couldn't load snapshots: ${err.message}`);
+    return;
+  }
+  if (token !== loadToken || !document.getElementById('fi-kpi-grid')) return;
 
   entries = data || [];
   if (!entries.length) {
@@ -239,7 +257,7 @@ function model() {
 }
 
 function recompute() {
-  if (!entries.length) return;
+  if (!entries.length || !scenario) return;
   const m = model();
   renderKPIs(m);
   renderMilestones(m);
@@ -270,6 +288,7 @@ function renderKPIs(m) {
   const fiPct      = m.target > 0 ? (m.currentNet / m.target) * 100 : 0;
   const coastPct   = m.coast > 0 ? (m.currentNet / m.coast) * 100 : 0;
   const passive    = m.currentNet * (settings.get('passive_income_yield') / 100) / 12;
+  const monthlyExpenses = settings.get('monthly_expenses');
 
   const kpis = [
     {
@@ -324,18 +343,15 @@ function renderKPIs(m) {
       id: 'fi-k-passive', label: 'Est. passive income', icon: 'fa-money-bill-wave',
       tone: 'teal', value: formatINR(passive), unit: '/mo', raw: Math.round(passive),
       badge: {
-        text: passive >= settings.get('monthly_expenses') ? 'Covers expenses' : `${formatPercent(settings.get('monthly_expenses') > 0 ? (passive / settings.get('monthly_expenses')) * 100 : 0)} of expenses`,
-        type: passive >= settings.get('monthly_expenses') ? 'positive' : 'neutral',
+        text: passive >= monthlyExpenses ? 'Covers expenses' : `${formatPercent(monthlyExpenses > 0 ? (passive / monthlyExpenses) * 100 : 0)} of expenses`,
+        type: passive >= monthlyExpenses ? 'positive' : 'neutral',
       },
       sub: `At ${settings.get('passive_income_yield')}% blended yield`,
       tooltip: 'Net worth × blended passive yield ÷ 12. What the portfolio would throw off monthly today.',
     },
   ];
 
-  const grid = document.getElementById('fi-kpi-grid');
-  if (!grid) return;
-
-  renderKpiCards(grid, kpis);
+  renderKpiCards(document.getElementById('fi-kpi-grid'), kpis);
 }
 
 function renderMilestones(m) {
@@ -396,10 +412,6 @@ function buildProjectionChart(m) {
     startISO: m.latest.date,
   }).map(p => ({ x: p.date, y: p.value }));
 
-  const gradient = ctx.getContext('2d').createLinearGradient(0, 0, 0, 300);
-  gradient.addColorStop(0, 'rgba(56,189,248,0.22)');
-  gradient.addColorStop(1, 'rgba(56,189,248,0)');
-
   projectionChart = new Chart(ctx, {
     type: 'line',
     data: {
@@ -408,7 +420,7 @@ function buildProjectionChart(m) {
           label: 'Actual',
           data: actual,
           borderColor: CHART_COLORS.accent,
-          backgroundColor: gradient,
+          backgroundColor: verticalGradient(ctx, 300),
           borderWidth: 2.5, fill: true, tension: 0.35,
           pointBackgroundColor: CHART_COLORS.accent, pointRadius: 3, pointHoverRadius: 6,
         },
@@ -440,32 +452,20 @@ function buildProjectionChart(m) {
       },
       scales: {
         x: { type: 'time', time: { unit: 'year', displayFormats: { year: 'yyyy' } }, grid: { display: false }, ticks: { maxRotation: 0 } },
-        y: {
-          grid: { color: 'rgba(148,163,184,0.06)' },
-          ticks: {
-            callback: v => {
-              if (Math.abs(v) >= 1e7) return '₹' + (v / 1e7).toFixed(1) + 'Cr';
-              if (Math.abs(v) >= 1e5) return '₹' + (v / 1e5).toFixed(1) + 'L';
-              return '₹' + (v / 1000).toFixed(0) + 'k';
-            }
-          }
-        }
+        y: { grid: { color: GRID_LINE }, ticks: { callback: inrTicks } },
       }
     }
   });
 }
 
 async function saveScenario() {
+  if (!scenario) return;
   const btn = document.getElementById('fi-save-scenario');
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
-
-  const { error } = await settings.saveSettings({
+  const { error } = await withBusy(btn, 'Saving…', () => settings.saveSettings({
     monthly_contribution: scenario.monthly,
     expected_return: scenario.returnPct,
     fi_multiplier: scenario.multiplier,
-  });
-
-  if (btn) { btn.disabled = false; btn.textContent = 'Save as my assumptions'; }
+  }));
 
   if (error) { showToast('Save failed: ' + error.message, 'error'); return; }
 

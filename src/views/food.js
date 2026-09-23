@@ -21,12 +21,14 @@ import {
   indexDictionary, eventNutrition, summarise, bucketDays, dishNutrition, SOURCE_LABEL,
 } from '../ledger/nutrition.js';
 import { localDateISO, entityRef } from '../ledger/normalize.js';
+import { formatTime as fmtTime, formatDayHeading as fmtDayHeading, toLocalInput, shiftISO as shiftDay } from '../ledger/dates.js';
 import { isInflow } from '../ledger/summary.js';
 import * as settings from '../settings.js';
 import {
   escapeHTML, formatINRFull, downloadCSV, openModal, closeModal, showToast,
-  comboboxHTML, wireCombobox, destroyChart, CHART_COLORS, renderKpiCards,
+  comboboxHTML, wireCombobox, destroyChart, CHART_COLORS, renderKpiCards, emptyState,
 } from '../utils.js';
+import { verticalGradient, GRID_LINE } from '../charts.js';
 import { openEventDetail } from './ledger.js';
 
 let events = [];            // every food event, all time — the period is a filter
@@ -46,8 +48,12 @@ let query = '';
 let onlyEmpty = false;      // "show me only the meals I still have to fill in"
 let searchDebounce = null;
 let calorieChartRef = null;
+// A load that resolves after the user has left must not paint a dead DOM.
+let loadToken = 0;
 
 const timeZone = () => settings.get('ledger_timezone') || 'Asia/Kolkata';
+const formatTime = iso => fmtTime(iso, timeZone());
+const formatDayHeading = day => fmtDayHeading(day, { year: false });
 const kcalTarget = () => Number(settings.get('food_kcal_target')) || 1800;
 
 
@@ -56,9 +62,8 @@ export async function renderFood(container) {
   period = { preset: '30', from: null, to: null };
   query = '';
   onlyEmpty = false;
-  // Chart.js keeps a live handle on a canvas that is about to be replaced by
-  // the innerHTML below; leaving it attached leaks the old chart and its
-  // resize listener on every visit to this page.
+  // The router calls unmount() before this; a second destroy is a no-op and
+  // covers a render that did not come through the router.
   calorieChartRef = destroyChart(calorieChartRef);
 
   container.innerHTML = `
@@ -90,7 +95,7 @@ export async function renderFood(container) {
       </div>
     </div>
 
-    <div class="page-body fd-page">
+    <div class="page-body vp-page fd-page">
       <div class="kpi-grid fd-kpis" id="fd-stats"></div>
 
       <div class="fd-layout">
@@ -104,14 +109,14 @@ export async function renderFood(container) {
           </div>
         </div>
 
-        <div class="table-section fd-panel">
+        <div class="table-section vp-panel">
           <div class="table-toolbar fd-toolbar">
             <div class="table-tabs">
               <button type="button" class="table-tab active" id="fd-tab-meals">
-                <i class="fas fa-utensils" style="margin-right:0.3rem"></i>Meals
+                <i class="fas fa-utensils" aria-hidden="true"></i>Meals
               </button>
               <button type="button" class="table-tab" id="fd-tab-dishes">
-                <i class="fas fa-ranking-star" style="margin-right:0.3rem"></i>Dishes
+                <i class="fas fa-ranking-star" aria-hidden="true"></i>Dishes
               </button>
             </div>
             <div class="lg-controls">
@@ -129,7 +134,7 @@ export async function renderFood(container) {
               </button>
             </div>
           </div>
-          <div class="fd-scroll" id="fd-body"></div>
+          <div class="vp-scroll" id="fd-body"></div>
         </div>
       </div>
     </div>
@@ -197,6 +202,16 @@ export async function renderFood(container) {
   await loadData();
 }
 
+export { renderFood as render };
+
+/** Release the chart and the pending search before the DOM goes. */
+export function unmount() {
+  loadToken++;
+  clearTimeout(searchDebounce);
+  searchDebounce = null;
+  calorieChartRef = destroyChart(calorieChartRef);
+}
+
 function switchTab(tab) {
   activeTab = tab;
   document.getElementById('fd-tab-meals').classList.toggle('active', tab === 'meals');
@@ -205,6 +220,7 @@ function switchTab(tab) {
 }
 
 async function loadData() {
+  const token = ++loadToken;
   const body = document.getElementById('fd-body');
   if (body) body.innerHTML = `<div class="skeleton skeleton--table"></div>`;
 
@@ -219,19 +235,19 @@ async function loadData() {
       api.searchEvents({ types: ['food'], limit: 1000 }),
       api.foodDictionary().catch(() => []),
     ]);
+    if (token !== loadToken || !body?.isConnected) return;
     // A dismissed event is one you said did not happen. It stays in the
     // ledger so ingestion cannot recreate it, but it was never eaten.
     events = (result?.events || []).filter(e => e.status !== 'dismissed');
     dict = indexDictionary(rows);
     paint();
   } catch (err) {
+    if (token !== loadToken) return;
     if (body) {
-      body.innerHTML = `
-        <div class="empty-state">
-          <i class="fas fa-triangle-exclamation" style="font-size:1.5rem;color:var(--warning)"></i>
-          <p style="margin-top:0.75rem">Could not load your meals.</p>
-          <p class="text-muted" style="font-size:0.85rem">${escapeHTML(err.message)}</p>
-        </div>`;
+      body.innerHTML = emptyState({
+        icon: 'fa-triangle-exclamation', tone: 'warning',
+        title: 'Could not load your meals.', hint: err.message,
+      });
     }
   }
 }
@@ -254,11 +270,6 @@ function periodDates() {
   return { from: shiftDay(today, -(Number(period.preset) - 1)), to: today };
 }
 
-function shiftDay(iso, offset) {
-  const d = new Date(`${iso}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + offset);
-  return d.toISOString().slice(0, 10);
-}
 
 function inPeriod() {
   const zone = timeZone();
@@ -296,7 +307,7 @@ function paint() {
   if (!body) return;
 
   const list = visible();
-  if (!list.length) { body.innerHTML = emptyState(); return; }
+  if (!list.length) { body.innerHTML = listEmptyState(); return; }
 
   body.innerHTML = activeTab === 'dishes' ? renderDishes(list) : renderMeals(list);
 
@@ -495,16 +506,10 @@ function openBasket(event) {
   const where = event ? (event.data?.restaurant || event.data?.merchant || event.title) : null;
   const meal = mealMeta(mealSlot(when, zone, event?.subtype) || 'snack');
 
-  openModal(`
-    <div class="modal-header">
-      <div class="modal-title">
-        <i class="fas ${meal.icon}" style="color:${meal.color};margin-right:0.5rem" aria-hidden="true"></i>
-        ${isNew ? 'What did you eat?' : 'What did you have?'}
-      </div>
-      <button class="modal-close" id="fb-close" aria-label="Close"><i class="fas fa-times"></i></button>
-    </div>
-
-    <div class="modal-body">
+  openModal({
+    title: isNew ? 'What did you eat?' : 'What did you have?',
+    icon: meal.icon, iconColor: meal.color,
+    body: `
       ${isNew ? `
         <div class="form-row">
           <div class="form-group">
@@ -559,14 +564,11 @@ function openBasket(event) {
       <div class="form-group">
         <label class="form-label">${isNew ? 'You ate' : 'In this order'}</label>
         <div id="fb-list"></div>
-      </div>
-    </div>
-
-    <div class="modal-footer">
-      <button class="btn-cancel" id="fb-cancel">Cancel</button>
-      <button class="btn-submit" id="fb-save">${isNew ? 'Add meal' : 'Save'}</button>
-    </div>
-  `);
+      </div>`,
+    footer: `
+      <button type="button" class="btn-cancel" data-close>Cancel</button>
+      <button type="button" class="btn-submit" id="fb-save">${isNew ? 'Add meal' : 'Save'}</button>`,
+  });
 
   const $ = id => document.getElementById(id);
   if (isNew) wireCombobox('fb-where');
@@ -644,9 +646,6 @@ function openBasket(event) {
     paintOptions($('fb-filter').value);
   });
 
-  $('fb-close').addEventListener('click', closeModal);
-  $('fb-cancel').addEventListener('click', closeModal);
-
   $('fb-save').addEventListener('click', async () => {
     const save = $('fb-save');
     save.disabled = true;
@@ -698,11 +697,6 @@ function openBasket(event) {
 }
 
 /** A datetime-local value for an instant, in the browser's own zone. */
-function toLocalInput(iso) {
-  const date = new Date(iso);
-  const pad = n => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
 
 /** Drop the keys with nothing in them, so `data` holds only what is known. */
 function prune(object) {
@@ -812,15 +806,11 @@ function aggregateDishes(list) {
 function renderDishes(list) {
   const dishes = aggregateDishes(list);
   if (!dishes.length) {
-    return `
-      <div class="empty-state">
-        <i class="fas fa-utensils" style="font-size:1.5rem;color:var(--text-muted)"></i>
-        <p style="margin-top:0.75rem">Nothing recorded in this period.</p>
-        <p class="text-muted" style="font-size:0.85rem;max-width:34rem;margin:0.5rem auto 0">
-          Line items come from the order receipts. Older events predate the parser that reads them —
-          <code>npm run ledger:ingest -- --backfill-days 90</code> fills them in.
-        </p>
-      </div>`;
+    return emptyState({
+      icon: 'fa-utensils', title: 'Nothing recorded in this period.',
+      detail: 'Line items come from the order receipts. Older events predate the parser that reads them — '
+            + '<code>npm run ledger:ingest -- --backfill-days 90</code> fills them in.',
+    });
   }
 
   // Share of everything eaten in the period, which is a fact about your diet.
@@ -919,9 +909,7 @@ function renderCalorieChart() {
   const canvas = document.getElementById('fd-calorie-chart');
   if (!canvas) return;
 
-  const gradient = canvas.getContext('2d').createLinearGradient(0, 0, 0, 260);
-  gradient.addColorStop(0, 'rgba(56,189,248,0.18)');
-  gradient.addColorStop(1, 'rgba(56,189,248,0)');
+  const gradient = verticalGradient(canvas, 260, CHART_COLORS.accent, 0.18);
 
   calorieChartRef = new Chart(canvas, {
     type: 'line',
@@ -997,7 +985,7 @@ function renderCalorieChart() {
           beginAtZero: true,
           // Keep the target line inside the plot even on a light week.
           suggestedMax: Math.round(target * 1.15),
-          grid: { color: 'rgba(148,163,184,0.06)' },
+          grid: { color: GRID_LINE },
           ticks: { callback: v => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v) },
         },
       },
@@ -1091,30 +1079,18 @@ function renderGapCount() {
   document.getElementById('fd-gaps').disabled = gaps === 0 && !onlyEmpty;
 }
 
-function emptyState() {
+function listEmptyState() {
   if (onlyEmpty) {
-    return `
-      <div class="empty-state">
-        <i class="fas fa-circle-check" style="font-size:1.5rem;color:var(--success)"></i>
-        <p style="margin-top:0.75rem">Every meal in this period has its dishes.</p>
-      </div>`;
+    return emptyState({ icon: 'fa-circle-check', tone: 'success', title: 'Every meal in this period has its dishes.' });
   }
   if (query) {
-    return `
-      <div class="empty-state">
-        <i class="fas fa-filter-circle-xmark" style="font-size:1.5rem;color:var(--text-muted)"></i>
-        <p style="margin-top:0.75rem">Nothing matching “${escapeHTML(query)}”.</p>
-      </div>`;
+    return emptyState({ icon: 'fa-filter-circle-xmark', title: `Nothing matching “${query}”.` });
   }
-  return `
-    <div class="empty-state">
-      <i class="fas fa-utensils" style="font-size:1.5rem;color:var(--accent)"></i>
-      <p style="margin-top:0.75rem">No food events in this period.</p>
-      <p class="text-muted" style="font-size:0.85rem;max-width:34rem;margin:0.5rem auto 0">
-        Meals arrive with the order receipts. Widen the period, run <code>npm run ledger:ingest</code>,
-        or add one yourself with the + button.
-      </p>
-    </div>`;
+  return emptyState({
+    icon: 'fa-utensils', tone: 'accent', title: 'No food events in this period.',
+    detail: 'Meals arrive with the order receipts. Widen the period, run <code>npm run ledger:ingest</code>, '
+          + 'or add one yourself with the + button.',
+  });
 }
 
 /** One row per item, not per order — the point of the export is the dishes. */
@@ -1141,16 +1117,5 @@ function exportItems() {
   downloadCSV(headers, rows, `food-${localDateISO(new Date(), zone)}.csv`);
 }
 
-function formatTime(iso) {
-  return new Date(iso).toLocaleTimeString('en-IN', {
-    hour: '2-digit', minute: '2-digit', hour12: false, timeZone: timeZone(),
-  });
-}
 
-function formatDayHeading(day) {
-  const [y, m, d] = String(day).split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-IN', {
-    weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC',
-  });
-}
 

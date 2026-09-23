@@ -1,4 +1,5 @@
 import { supabase } from '../supabase.js';
+import { escapeHTML } from '../utils.js';
 
 /**
  * Where Supabase should send the user back to after they click the magic link.
@@ -50,7 +51,7 @@ export function renderLogin({ error } = {}) {
         </div>
 
         <button type="button" class="btn-primary" id="magic-link-btn">
-          <i class="fas fa-paper-plane" style="margin-right:0.5rem"></i>
+          <i class="fas fa-paper-plane" aria-hidden="true"></i>
           Send Magic Link
         </button>
 
@@ -75,7 +76,7 @@ export function renderLogin({ error } = {}) {
     }
 
     btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin" style="margin-right:0.5rem"></i>Sending...';
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin" aria-hidden="true"></i>Sending...';
 
     let sendError = null;
     try {
@@ -90,7 +91,7 @@ export function renderLogin({ error } = {}) {
     }
 
     btn.disabled = false;
-    btn.innerHTML = '<i class="fas fa-paper-plane" style="margin-right:0.5rem"></i>Send Magic Link';
+    btn.innerHTML = '<i class="fas fa-paper-plane" aria-hidden="true"></i>Send Magic Link';
 
     if (sendError) {
       showStatus(`Error: ${sendError.message || 'Could not send the magic link. Please try again.'}`, 'error');
@@ -110,12 +111,4 @@ export function renderLogin({ error } = {}) {
     status.innerHTML = msg;
     status.className = `login-status ${type}`;
   }
-}
-
-// The email regex above still admits characters like `<`, so the address has to
-// be escaped before it goes back out through innerHTML.
-function escapeHTML(str) {
-  const el = document.createElement('div');
-  el.textContent = str;
-  return el.innerHTML;
 }

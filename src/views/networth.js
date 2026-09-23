@@ -1,20 +1,15 @@
-import { Chart, Grid, gridHtml } from '../vendor.js';
-import { supabase, getCurrentUserId } from '../supabase.js';
+import { gridHtml } from '../vendor.js';
+import { getCurrentUserId } from '../supabase.js';
+import { listEntries, saveEntry, deleteEntry } from '../networth/api.js';
 import * as settings from '../settings.js';
 import {
   formatINR, formatINRFull, formatPercent, formatDate, todayISO,
-  destroyChart, makeCopyable, downloadCSV, escapeHTML, cssVar,
-  openModal, closeModal, showToast, parseNum, ASSET_COLORS, CHART_COLORS,
+  destroyChart, downloadCSV, escapeHTML,
+  openModal, closeModal, showToast, parseNum, withBusy, buildGrid,
   computeNet, computeAssets, computeLiquid, computeEmergencyFund, renderKpiCards,
   numCell, rowActions,
 } from '../utils.js';
-
-// Applied to both the header and the body cells of a column, so a numeric
-// column is right-aligned end to end.
-// A data attribute, not a class: Grid.js writes `class` straight onto the
-// cell, replacing the gridjs-th / gridjs-td classes it needs to stay styled.
-const NUMERIC_COL = () => ({ 'data-align': 'end' });
-const ACTIONS_COL = () => ({ 'data-align': 'end' });
+import { netWorthSeriesChart, allocationDoughnut, wireChartToggle } from '../charts.js';
 
 let entries = [];
 let netWorthChartRef = null;
@@ -22,13 +17,13 @@ let allocationChartRef = null;
 let tableGrid = null;
 let editingId = null;
 let chartType = 'line';
-let searchTerm = '';
 let filterYear = '';
+// A load that resolves after the user has left must not paint a dead DOM.
+let loadToken = 0;
 
 export async function renderNetWorth(container) {
   editingId = null;
   chartType = 'line';
-  searchTerm = '';
   filterYear = '';
 
   container.innerHTML = `
@@ -37,7 +32,7 @@ export async function renderNetWorth(container) {
         <h2>Net Worth</h2>
         <p>Track your assets, liabilities, and financial independence progress</p>
       </div>
-      <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+      <div class="page-actions">
         <button type="button" class="btn-sm btn-ghost" id="nw-export-btn">
           <i class="fas fa-download"></i> Export CSV
         </button>
@@ -87,18 +82,14 @@ export async function renderNetWorth(container) {
       <!-- History Table -->
       <div class="table-section">
         <div class="table-toolbar">
-          <div style="font-weight:700;font-size:0.9rem;color:var(--text-primary)">
-            <i class="fas fa-clock-rotate-left" style="color:var(--accent);margin-right:0.4rem"></i>
+          <div class="table-title">
+            <i class="fas fa-clock-rotate-left" aria-hidden="true"></i>
             Historical Snapshots
           </div>
-          <div class="table-actions" style="display:flex;gap:0.5rem;align-items:center">
-            <select id="nw-year-filter" class="form-input" style="padding:0.35rem 0.5rem;font-size:0.8rem;height:36px;width:120px;border-radius:var(--radius-sm)">
+          <div class="table-actions">
+            <select id="nw-year-filter" class="form-select toolbar-select" aria-label="Filter by year">
               <option value="">All Years</option>
             </select>
-            <div class="search-input-wrap">
-              <i class="fas fa-search"></i>
-              <input type="text" class="search-input" id="nw-search" placeholder="Search entries…" />
-            </div>
             <button type="button" class="btn-icon" id="nw-refresh-btn" title="Refresh" aria-label="Refresh">
               <i class="fas fa-rotate-right"></i>
             </button>
@@ -116,36 +107,15 @@ export async function renderNetWorth(container) {
     </button>
   `;
 
-  // Chart toggles
-  document.getElementById('nw-line-btn').addEventListener('click', () => {
-    chartType = 'line';
-    document.getElementById('nw-line-btn').classList.add('active');
-    document.getElementById('nw-bar-btn').classList.remove('active');
-    buildAccumulationChart(entries, 'line');
-  });
-  document.getElementById('nw-bar-btn').addEventListener('click', () => {
-    chartType = 'bar';
-    document.getElementById('nw-bar-btn').classList.add('active');
-    document.getElementById('nw-line-btn').classList.remove('active');
-    buildAccumulationChart(entries, 'bar');
+  wireChartToggle('nw-line-btn', 'nw-bar-btn', type => {
+    chartType = type;
+    buildAccumulationChart(entries, type);
   });
 
-  // FAB
   document.getElementById('nw-fab').addEventListener('click', () => openEntryForm());
-
-  // Export
   document.getElementById('nw-export-btn').addEventListener('click', exportCSV);
-
-  // Refresh
   document.getElementById('nw-refresh-btn').addEventListener('click', loadData);
 
-  // Search
-  document.getElementById('nw-search').addEventListener('input', e => {
-    searchTerm = e.target.value.toLowerCase();
-    renderTable();
-  });
-
-  // Year filter
   document.getElementById('nw-year-filter')?.addEventListener('change', e => {
     filterYear = e.target.value;
     renderTable();
@@ -154,21 +124,33 @@ export async function renderNetWorth(container) {
   await loadData();
 }
 
-async function loadData() {
-  const { data, error } = await supabase
-    .from('net_worth_entries')
-    .select('*')
-    .order('date', { ascending: true });
+export { renderNetWorth as render };
 
-  if (error) {
-    showToast('Failed to load data: ' + error.message, 'error');
+/** Release the charts and the grid before the router replaces the DOM. */
+export function unmount() {
+  loadToken++;
+  netWorthChartRef = destroyChart(netWorthChartRef);
+  allocationChartRef = destroyChart(allocationChartRef);
+  if (tableGrid) { try { tableGrid.destroy(); } catch (_) {} }
+  tableGrid = null;
+}
+
+async function loadData() {
+  const token = ++loadToken;
+  let data;
+  try {
+    data = await listEntries();
+  } catch (err) {
+    if (token === loadToken) showToast('Failed to load data: ' + err.message, 'error');
     return;
   }
+  if (token !== loadToken || !document.getElementById('nw-kpi-grid')) return;
 
   entries = data || [];
   renderKPIs();
   buildAccumulationChart(entries, chartType);
-  buildAllocationChart(entries[entries.length - 1]);
+  allocationChartRef = destroyChart(allocationChartRef);
+  allocationChartRef = allocationDoughnut(document.getElementById('nw-allocation-chart'), entries[entries.length - 1]);
   renderYearFilter();
   renderTable();
 }
@@ -184,12 +166,7 @@ function renderKPIs() {
     net:         computeNet(latest),
     liquid:      computeLiquid(latest),
   };
-  const prv = {
-    assets:      computeAssets(prev),
-    liabilities: prev?.credit_cards || 0,
-    net:         computeNet(prev),
-    liquid:      computeLiquid(prev),
-  };
+  const prv = { net: computeNet(prev) };
 
   const nwChange = prv.net !== 0 ? ((cur.net - prv.net) / Math.abs(prv.net)) * 100 : 0;
   const nwChangeLabel = prev
@@ -254,110 +231,13 @@ function renderKPIs() {
     },
   ];
 
-  const grid = document.getElementById('nw-kpi-grid');
-  if (!grid) return;
-
-  renderKpiCards(grid, kpis);
+  renderKpiCards(document.getElementById('nw-kpi-grid'), kpis);
 }
 
 // ── Charts ──────────────────────────────────────────────
 function buildAccumulationChart(data, type) {
   netWorthChartRef = destroyChart(netWorthChartRef);
-  const ctx = document.getElementById('nw-accumulation-chart');
-  if (!ctx || !data.length) return;
-
-  const labels = data.map(e => e.date);
-  const nwData = data.map(e => computeNet(e));
-  const assetsData = data.map(e => computeAssets(e));
-
-  const gradient = ctx.getContext('2d').createLinearGradient(0,0,0,220);
-  gradient.addColorStop(0, 'rgba(56,189,248,0.2)');
-  gradient.addColorStop(1, 'rgba(56,189,248,0)');
-
-  netWorthChartRef = new Chart(ctx, {
-    type: type === 'bar' ? 'bar' : 'line',
-    data: {
-      labels,
-      datasets: [
-        {
-          label: 'Net worth',
-          data: nwData,
-          borderColor: CHART_COLORS.accent,
-          backgroundColor: type === 'line' ? gradient : 'rgba(56,189,248,0.35)',
-          borderWidth: 2.5, fill: type === 'line', tension: 0.4,
-          pointBackgroundColor: CHART_COLORS.accent, pointRadius: 3, pointHoverRadius: 6,
-        },
-        {
-          label: 'Total assets',
-          data: assetsData,
-          borderColor: CHART_COLORS.success,
-          backgroundColor: 'rgba(16,185,129,0.08)',
-          borderWidth: 1.5, fill: false, tension: 0.4,
-          pointRadius: 0, pointHoverRadius: 4,
-          borderDash: [4, 4],
-        }
-      ]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: {
-          position: 'top', labels: { usePointStyle: true, pointStyleWidth: 8, padding: 16, font: { size: 11 } }
-        },
-        tooltip: {
-          callbacks: { label: ctx => ` ${ctx.dataset.label}: ${formatINRFull(ctx.parsed.y)}` }
-        }
-      },
-      scales: {
-        x: { type: 'time', time: { unit: 'month', displayFormats: { month: 'MMM yy' } }, grid: { display: false }, ticks: { maxRotation: 0 } },
-        y: {
-          grid: { color: 'rgba(148,163,184,0.06)' },
-          ticks: {
-            callback: v => {
-              if (v >= 1e7) return '₹' + (v/1e7).toFixed(1) + 'Cr';
-              if (v >= 1e5) return '₹' + (v/1e5).toFixed(1) + 'L';
-              return '₹' + (v/1000).toFixed(0) + 'k';
-            }
-          }
-        }
-      }
-    }
-  });
-}
-
-function buildAllocationChart(latest) {
-  allocationChartRef = destroyChart(allocationChartRef);
-  const ctx = document.getElementById('nw-allocation-chart');
-  if (!ctx || !latest) return;
-
-  const fields = [
-    { key: 'stocks',       label: 'Stocks',       color: ASSET_COLORS.stocks },
-    { key: 'mutual_funds', label: 'Mutual Funds',  color: ASSET_COLORS.mutual_funds },
-    { key: 'cash',         label: 'Cash',          color: ASSET_COLORS.cash },
-    { key: 'epf',          label: 'EPF',           color: ASSET_COLORS.epf },
-    { key: 'gold',         label: 'Gold',          color: ASSET_COLORS.gold },
-    { key: 'fds',          label: 'FDs',           color: ASSET_COLORS.fds },
-  ].filter(f => (latest[f.key] || 0) > 0);
-
-  allocationChartRef = new Chart(ctx, {
-    type: 'doughnut',
-    data: {
-      labels: fields.map(f => f.label),
-      datasets: [{
-        data: fields.map(f => latest[f.key] || 0),
-        backgroundColor: fields.map(f => f.color),
-        borderColor: cssVar('--bg-card', '#1e293b'), borderWidth: 3, hoverOffset: 8,
-      }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false, cutout: '72%',
-      plugins: {
-        legend: { position: 'bottom', labels: { padding: 12, usePointStyle: true, pointStyleWidth: 8, font: { size: 10.5 } } },
-        tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${formatINR(ctx.parsed)}` } }
-      }
-    }
-  });
+  netWorthChartRef = netWorthSeriesChart(document.getElementById('nw-accumulation-chart'), data, type, { withAssets: true });
 }
 
 function renderYearFilter() {
@@ -366,7 +246,7 @@ function renderYearFilter() {
 
   const years = [...new Set(entries.map(e => e.date?.slice(0, 4)))].filter(Boolean).sort().reverse();
   const currentVal = select.value;
-  select.innerHTML = '<option value="">All Years</option>' + 
+  select.innerHTML = '<option value="">All Years</option>' +
     years.map(y => `<option value="${escapeHTML(y)}">${escapeHTML(y)}</option>`).join('');
   if (years.includes(currentVal)) {
     select.value = currentVal;
@@ -379,18 +259,8 @@ function renderYearFilter() {
 function renderTable() {
   const container = document.getElementById('nw-table-container');
   if (!container) return;
-  if (tableGrid) { try { tableGrid.destroy(); } catch(_) {} }
 
-  let filtered = entries;
-  if (filterYear) {
-    filtered = filtered.filter(e => e.date?.startsWith(filterYear));
-  }
-  if (searchTerm) {
-    filtered = filtered.filter(e =>
-      e.date?.includes(searchTerm) ||
-      formatINRFull(computeNet(e)).includes(searchTerm)
-    );
-  }
+  const filtered = filterYear ? entries.filter(e => e.date?.startsWith(filterYear)) : entries;
 
   const rows = [...filtered].reverse().map(e => {
     const net    = computeNet(e);
@@ -418,26 +288,20 @@ function renderTable() {
     ];
   });
 
-  tableGrid = new Grid({
-    columns: [
-      // Column names are the words the rest of the app uses. This one read
-      // "MFs" next to a Settings screen and an allocation chart that both
-      // say "Mutual Funds".
-      { name: 'Date' },
-      { name: 'Stocks',       attributes: NUMERIC_COL },
-      { name: 'Mutual Funds', attributes: NUMERIC_COL },
-      { name: 'Cash',         attributes: NUMERIC_COL },
-      { name: 'Total Assets', attributes: NUMERIC_COL },
-      { name: 'Liabilities',  attributes: NUMERIC_COL },
-      { name: 'Net Worth',    attributes: NUMERIC_COL },
-      { name: 'Change',       attributes: NUMERIC_COL },
-      { name: 'Actions', sort: false, attributes: ACTIONS_COL },
-    ],
-    data: rows,
-    pagination: { limit: 10 },
-    sort: true,
-    language: { noRecordsFound: 'No snapshots found. Add your first one!' },
-  }).render(container);
+  tableGrid = buildGrid(container, tableGrid, [
+    // Column names are the words the rest of the app uses. This one read
+    // "MFs" next to a Settings screen and an allocation chart that both
+    // say "Mutual Funds".
+    { name: 'Date' },
+    { name: 'Stocks',       numeric: true },
+    { name: 'Mutual Funds', numeric: true },
+    { name: 'Cash',         numeric: true },
+    { name: 'Total Assets', numeric: true },
+    { name: 'Liabilities',  numeric: true },
+    { name: 'Net Worth',    numeric: true },
+    { name: 'Change',       numeric: true },
+    { name: 'Actions',      actions: true },
+  ], rows, { limit: 10, empty: 'No snapshots found. Add your first one!' });
 
   window.__nwEdit = (id) => {
     const entry = entries.find(e => e.id === id);
@@ -446,95 +310,72 @@ function renderTable() {
 
   window.__nwDelete = async (id) => {
     if (!confirm('Delete this snapshot?')) return;
-    const { error } = await supabase.from('net_worth_entries').delete().eq('id', id);
-    if (error) { showToast('Delete failed: ' + error.message, 'error'); return; }
+    try {
+      await deleteEntry(id);
+    } catch (err) {
+      showToast('Delete failed: ' + err.message, 'error');
+      return;
+    }
     showToast('Snapshot deleted.');
     await loadData();
   };
 }
 
-// Removed — use computeNet() from utils.js instead.
-
 // ── Form Modal ───────────────────────────────────────────
 function openEntryForm(entry = null) {
   editingId = entry?.id || null;
-  const title = entry ? 'Edit snapshot' : 'Add a snapshot';
 
-  openModal(`
-    <div class="modal-header">
-      <div class="modal-title">${escapeHTML(title)}</div>
-      <button class="modal-close" id="nw-modal-close"><i class="fas fa-times"></i></button>
-    </div>
-    <div class="modal-body">
+  const money = (id, label, value) => `
+    <div class="form-group">
+      <label class="form-label" for="${id}">${label}</label>
+      <input type="number" class="form-input" id="${id}" placeholder="0" min="0" value="${value ?? ''}" />
+    </div>`;
+
+  openModal({
+    title: entry ? 'Edit snapshot' : 'Add a snapshot',
+    body: `
       <div class="form-group">
-        <label class="form-label">Date</label>
+        <label class="form-label" for="nw-f-date">Date</label>
         <input type="date" class="form-input" id="nw-f-date" value="${escapeHTML(entry?.date || todayISO())}" />
       </div>
 
-      <div style="font-size:0.72rem;font-weight:700;color:var(--success);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.6rem;margin-top:0.4rem">
-        <i class="fas fa-arrow-up" style="margin-right:0.25rem"></i>Assets
+      <div class="form-section is-success">
+        <i class="fas fa-arrow-up" aria-hidden="true"></i>Assets
       </div>
       <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Stocks (₹)</label>
-          <input type="number" class="form-input" id="nw-f-stocks" placeholder="0" min="0" value="${entry?.stocks ?? ''}" />
-        </div>
-        <div class="form-group">
-          <label class="form-label">Mutual Funds (₹)</label>
-          <input type="number" class="form-input" id="nw-f-mf" placeholder="0" min="0" value="${entry?.mutual_funds ?? ''}" />
-        </div>
+        ${money('nw-f-stocks', 'Stocks (₹)', entry?.stocks)}
+        ${money('nw-f-mf', 'Mutual Funds (₹)', entry?.mutual_funds)}
       </div>
       <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Cash & Bank (₹)</label>
-          <input type="number" class="form-input" id="nw-f-cash" placeholder="0" min="0" value="${entry?.cash ?? ''}" />
-        </div>
-        <div class="form-group">
-          <label class="form-label">EPF (₹)</label>
-          <input type="number" class="form-input" id="nw-f-epf" placeholder="0" min="0" value="${entry?.epf ?? ''}" />
-        </div>
+        ${money('nw-f-cash', 'Cash & Bank (₹)', entry?.cash)}
+        ${money('nw-f-epf', 'EPF (₹)', entry?.epf)}
       </div>
       <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Gold (₹)</label>
-          <input type="number" class="form-input" id="nw-f-gold" placeholder="0" min="0" value="${entry?.gold ?? ''}" />
-        </div>
-        <div class="form-group">
-          <label class="form-label">Fixed Deposits (₹)</label>
-          <input type="number" class="form-input" id="nw-f-fds" placeholder="0" min="0" value="${entry?.fds ?? ''}" />
-        </div>
+        ${money('nw-f-gold', 'Gold (₹)', entry?.gold)}
+        ${money('nw-f-fds', 'Fixed Deposits (₹)', entry?.fds)}
       </div>
 
-      <div style="font-size:0.72rem;font-weight:700;color:var(--danger);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.6rem;margin-top:0.4rem">
-        <i class="fas fa-arrow-down" style="margin-right:0.25rem"></i>Liabilities
+      <div class="form-section is-danger">
+        <i class="fas fa-arrow-down" aria-hidden="true"></i>Liabilities
       </div>
-      <div class="form-group">
-        <label class="form-label">Credit Cards Outstanding (₹)</label>
-        <input type="number" class="form-input" id="nw-f-cc" placeholder="0" min="0" value="${entry?.credit_cards ?? ''}" />
-      </div>
+      ${money('nw-f-cc', 'Credit Cards Outstanding (₹)', entry?.credit_cards)}
 
       <!-- Live preview -->
-      <div style="background:var(--bg-elevated);border-radius:var(--radius-md);padding:1rem;margin-top:0.5rem;border:1px solid var(--border)">
-        <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:0.5rem;font-weight:700">Live Preview</div>
-        <div style="display:flex;justify-content:space-between;font-size:0.85rem">
-          <span style="color:var(--text-secondary)">Total Assets</span>
-          <span id="nw-preview-assets" style="font-weight:700;color:var(--success)">₹0</span>
+      <div class="form-preview">
+        <div class="form-preview-label">Live Preview</div>
+        <div class="form-preview-row">
+          <span>Total Assets</span>
+          <span class="form-preview-value" id="nw-preview-assets">₹0</span>
         </div>
-        <div style="display:flex;justify-content:space-between;font-size:0.85rem;margin-top:0.25rem">
-          <span style="color:var(--text-secondary)">Net Worth</span>
-          <span id="nw-preview-net" style="font-weight:800;color:var(--accent);font-size:1rem">₹0</span>
+        <div class="form-preview-row">
+          <span>Net Worth</span>
+          <span class="form-preview-value is-accent" id="nw-preview-net">₹0</span>
         </div>
-      </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn-cancel" id="nw-form-cancel">Cancel</button>
-      <button class="btn-submit" id="nw-form-submit">${entry ? 'Save changes' : 'Add snapshot'}</button>
-    </div>
-  `);
-
-  // Close handlers
-  document.getElementById('nw-modal-close').addEventListener('click', closeModal);
-  document.getElementById('nw-form-cancel').addEventListener('click', closeModal);
+      </div>`,
+    footer: `
+      <button type="button" class="btn-cancel" data-close>Cancel</button>
+      <button type="button" class="btn-submit" id="nw-form-submit">${entry ? 'Save changes' : 'Add snapshot'}</button>`,
+  });
 
   // Live preview
   const fields = ['nw-f-stocks','nw-f-mf','nw-f-cash','nw-f-epf','nw-f-gold','nw-f-fds','nw-f-cc'];
@@ -543,7 +384,6 @@ function openEntryForm(entry = null) {
   });
   updatePreview();
 
-  // Submit
   document.getElementById('nw-form-submit').addEventListener('click', submitForm);
 }
 
@@ -564,47 +404,40 @@ function updatePreview() {
   if (pa) pa.textContent = formatINRFull(assets);
   if (pn) {
     pn.textContent = formatINRFull(net);
-    pn.style.color = net >= 0 ? 'var(--accent)' : 'var(--danger)';
+    pn.classList.toggle('is-accent', net >= 0);
+    pn.classList.toggle('is-danger', net < 0);
   }
 }
 
 async function submitForm() {
   const btn = document.getElementById('nw-form-submit');
-  btn.disabled = true;
-  btn.textContent = 'Saving…';
+  await withBusy(btn, 'Saving…', async () => {
+    const payload = {
+      date:         document.getElementById('nw-f-date')?.value,
+      stocks:       parseNum(document.getElementById('nw-f-stocks')?.value),
+      mutual_funds: parseNum(document.getElementById('nw-f-mf')?.value),
+      cash:         parseNum(document.getElementById('nw-f-cash')?.value),
+      epf:          parseNum(document.getElementById('nw-f-epf')?.value),
+      gold:         parseNum(document.getElementById('nw-f-gold')?.value),
+      fds:          parseNum(document.getElementById('nw-f-fds')?.value),
+      credit_cards: parseNum(document.getElementById('nw-f-cc')?.value),
+      user_id:      await getCurrentUserId(),
+    };
 
-  const payload = {
-    date:         document.getElementById('nw-f-date')?.value,
-    stocks:       parseNum(document.getElementById('nw-f-stocks')?.value),
-    mutual_funds: parseNum(document.getElementById('nw-f-mf')?.value),
-    cash:         parseNum(document.getElementById('nw-f-cash')?.value),
-    epf:          parseNum(document.getElementById('nw-f-epf')?.value),
-    gold:         parseNum(document.getElementById('nw-f-gold')?.value),
-    fds:          parseNum(document.getElementById('nw-f-fds')?.value),
-    credit_cards: parseNum(document.getElementById('nw-f-cc')?.value),
-    user_id:      await getCurrentUserId(),
-  };
+    if (!payload.date) { showToast('Please select a date.', 'error'); return; }
+    if (editingId) payload.id = editingId;
 
-  if (!payload.date) {
-    showToast('Please select a date.', 'error');
-    btn.disabled = false;
-    btn.textContent = editingId ? 'Save changes' : 'Add snapshot';
-    return;
-  }
+    try {
+      await saveEntry(payload);
+    } catch (err) {
+      showToast('Save failed: ' + err.message, 'error');
+      return;
+    }
 
-  if (editingId) payload.id = editingId;
-
-  const { error } = await supabase.from('net_worth_entries').upsert([payload]);
-  if (error) {
-    showToast('Save failed: ' + error.message, 'error');
-    btn.disabled = false;
-    btn.textContent = editingId ? 'Save changes' : 'Add snapshot';
-    return;
-  }
-
-  closeModal();
-  showToast(editingId ? 'Snapshot updated!' : 'Snapshot added!');
-  await loadData();
+    closeModal();
+    showToast(editingId ? 'Snapshot updated!' : 'Snapshot added!');
+    await loadData();
+  });
 }
 
 // ── Export ───────────────────────────────────────────────

@@ -13,7 +13,6 @@ function defaults() {
 }
 
 let cache = defaults();
-let loaded = false;
 
 /**
  * Coerce a stored value to its declared type. jsonb round-trips types properly,
@@ -49,7 +48,6 @@ export async function loadSettings() {
     // take the app down — defaults are always a usable answer.
     console.warn('[settings] falling back to defaults:', error.message);
     cache = next;
-    loaded = true;
     return { settings: cache, error };
   }
 
@@ -59,7 +57,6 @@ export async function loadSettings() {
   }
 
   cache = next;
-  loaded = true;
   return { settings: cache, error: null };
 }
 
@@ -71,10 +68,6 @@ export function get(key) {
 /** The whole settings object (a copy — mutating it does nothing). */
 export function all() {
   return { ...cache };
-}
-
-export function isLoaded() {
-  return loaded;
 }
 
 /** Persist a patch of {key: value}. Only keys in the schema are written. */
@@ -113,19 +106,22 @@ export async function resetSetting(key) {
 // ======================================================
 // Derived values — computed from settings, never stored.
 // Storing a derived number is how it goes stale.
+//
+// Each takes an optional `values` object so the Settings screen can preview
+// what an unsaved draft would produce; with none given they read the cache.
 // ======================================================
 
-export function annualExpenses() {
-  return get('monthly_expenses') * 12;
+export function annualExpenses(values = cache) {
+  return values.monthly_expenses * 12;
 }
 
-export function fiTarget() {
-  return annualExpenses() * get('fi_multiplier');
+export function fiTarget(values = cache) {
+  return annualExpenses(values) * values.fi_multiplier;
 }
 
 /** Monthly surplus implied by the budget, before any investment return. */
-export function budgetedSurplus() {
-  return get('monthly_net_income') - get('monthly_expenses');
+export function budgetedSurplus(values = cache) {
+  return values.monthly_net_income - values.monthly_expenses;
 }
 
 /**
@@ -135,20 +131,20 @@ export function budgetedSurplus() {
  * back to what the budget implies. Budgeted surplus is a plan, not a fact — if
  * you've saved a real number, that's the better input.
  */
-export function plannedContribution() {
-  const explicit = get('monthly_contribution');
-  return explicit > 0 ? explicit : Math.max(0, budgetedSurplus());
+export function plannedContribution(values = cache) {
+  const explicit = values.monthly_contribution;
+  return explicit > 0 ? explicit : Math.max(0, budgetedSurplus(values));
 }
 
 /** Savings rate the budget implies, as a percentage of take-home. */
-export function budgetedSavingsRate() {
-  const income = get('monthly_net_income');
-  return income > 0 ? (budgetedSurplus() / income) * 100 : 0;
+export function budgetedSavingsRate(values = cache) {
+  const income = values.monthly_net_income;
+  return income > 0 ? (budgetedSurplus(values) / income) * 100 : 0;
 }
 
 /** Return net of inflation, as a decimal. Fisher equation, not a subtraction. */
-export function realReturnRate() {
-  const nominal = get('expected_return') / 100;
-  const inflation = get('inflation_rate') / 100;
+export function realReturnRate(values = cache) {
+  const nominal = values.expected_return / 100;
+  const inflation = values.inflation_rate / 100;
   return (1 + nominal) / (1 + inflation) - 1;
 }

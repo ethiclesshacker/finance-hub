@@ -1,4 +1,4 @@
-import { Chart } from './vendor.js';
+import { Chart, Grid } from './vendor.js';
 
 // ======================================================
 // Formatting utilities
@@ -73,7 +73,7 @@ export const ASSET_COLORS = {
   fds:          '#2dd4bf',
 };
 
-export const CHART_DEFAULTS = {
+const CHART_DEFAULTS = {
   color: '#94a3b8',
   borderColor: 'rgba(148,163,184,0.1)',
   // The bundled face registers as 'Inter Variable' (@fontsource-variable), not
@@ -268,8 +268,12 @@ export function downloadCSV(headers, rows, filename) {
     headers.join(','),
     ...rows.map(row => row.map(cell => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(','))
   ].join('\n');
+  downloadBlob(csvContent, 'text/csv;charset=utf-8;', filename);
+}
 
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+/** Hand the browser a file to save. The blob/anchor dance, written once. */
+export function downloadBlob(content, mime, filename) {
+  const blob = new Blob([content], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -280,21 +284,55 @@ export function downloadCSV(headers, rows, filename) {
 
 // ======================================================
 // Modal helpers
+//
+// One modal at a time. openModal draws the frame — header with title and
+// close button, optional tab strip, body, optional footer — and wires every
+// way out of it: the × button, any control carrying `data-close`, the
+// backdrop and Escape. Eleven dialogs used to each add their own close and
+// cancel listeners by id; now they only describe what goes inside.
 // ======================================================
 
-export function openModal(html) {
-  closeModal();
+let modalOnClose = null;
+
+/**
+ * @param {object} opts
+ *   title      — plain text; escaped here
+ *   icon       — Font Awesome class for an icon before the title (optional)
+ *   iconColor  — CSS colour for that icon (optional; dynamic values only)
+ *   tabs       — HTML for a `.modal-tabs` strip between header and body (optional)
+ *   body       — HTML for `.modal-body`
+ *   footer     — HTML for `.modal-footer` (optional). Buttons with `data-close`
+ *                close the modal.
+ *   footerClass — extra class on the footer (optional)
+ *   onClose    — runs when the user dismisses the modal or closeModal() is
+ *                called; not when another openModal replaces it.
+ */
+export function openModal({ title = '', icon = '', iconColor = '', tabs = '', body = '', footer = '', footerClass = '', onClose = null } = {}) {
+  closeModal({ silent: true });
+  modalOnClose = onClose;
+
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'modal-overlay';
-  overlay.innerHTML = `<div class="modal">${html}</div>`;
+  overlay.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" aria-label="${escapeHTML(title)}">
+      <div class="modal-header">
+        <div class="modal-title">
+          ${icon ? `<i class="fas ${escapeHTML(icon)}"${iconColor ? ` style="color:${escapeHTML(iconColor)}"` : ''} aria-hidden="true"></i>` : ''}
+          ${escapeHTML(title)}
+        </div>
+        <button type="button" class="modal-close" data-close aria-label="Close"><i class="fas fa-times" aria-hidden="true"></i></button>
+      </div>
+      ${tabs}
+      <div class="modal-body">${body}</div>
+      ${footer ? `<div class="modal-footer ${escapeHTML(footerClass)}">${footer}</div>` : ''}
+    </div>`;
   document.body.appendChild(overlay);
 
-  // Close on backdrop click
   overlay.addEventListener('click', e => {
-    if (e.target === overlay) closeModal();
+    // The backdrop, or anything marked as a way out.
+    if (e.target === overlay || e.target.closest('[data-close]')) closeModal();
   });
-  // Close on Escape
   document.addEventListener('keydown', handleEscape);
 }
 
@@ -302,10 +340,139 @@ function handleEscape(e) {
   if (e.key === 'Escape') closeModal();
 }
 
-export function closeModal() {
+export function closeModal({ silent = false } = {}) {
   const overlay = document.getElementById('modal-overlay');
   if (overlay) overlay.remove();
   document.removeEventListener('keydown', handleEscape);
+  const done = modalOnClose;
+  modalOnClose = null;
+  if (!silent && typeof done === 'function') done();
+}
+
+// ======================================================
+// Empty states and banners
+// ======================================================
+
+const EMPTY_TONES = ['accent', 'success', 'warning', 'danger', 'muted'];
+
+/**
+ * The "nothing here" block. Thirteen copies of the same markup carried the
+ * same inline styles; one renderer now.
+ *
+ *   icon   — Font Awesome class
+ *   tone   — 'accent' | 'success' | 'warning' | 'danger' | 'muted' (default)
+ *   title  — plain text
+ *   hint   — plain text, escaped (optional)
+ *   detail — HTML the caller has already escaped, for a hint that needs <code> (optional)
+ *   action — { id, label } for a button after the text (optional)
+ */
+export function emptyState({ icon = 'fa-inbox', tone = 'muted', title = '', hint = '', detail = '', action = null } = {}) {
+  const t = EMPTY_TONES.includes(tone) ? tone : 'muted';
+  return `
+    <div class="empty-state is-${t}">
+      <i class="fas ${escapeHTML(icon)}" aria-hidden="true"></i>
+      <p class="empty-state-title">${escapeHTML(title)}</p>
+      ${hint ? `<p class="empty-state-hint">${escapeHTML(hint)}</p>` : ''}
+      ${detail ? `<p class="empty-state-hint">${detail}</p>` : ''}
+      ${action ? `<button type="button" class="btn-sm btn-accent empty-state-action" id="${escapeHTML(action.id)}">${escapeHTML(action.label)}</button>` : ''}
+    </div>`;
+}
+
+/**
+ * A one-line banner above a page's content: a load failure with a retry,
+ * or "nothing yet" with a way to add something.
+ *
+ *   tone   — 'error' | 'empty'
+ *   title  — bold lead text
+ *   sub    — the sentence under it (optional)
+ *   action — { id, label, ghost } (optional)
+ */
+export function bannerHTML({ tone = 'error', title = '', sub = '', action = null } = {}) {
+  const isError = tone === 'error';
+  return `
+    <div class="dash-banner dash-banner--${isError ? 'error' : 'empty'}" role="${isError ? 'alert' : 'status'}">
+      <i class="fas ${isError ? 'fa-triangle-exclamation' : 'fa-seedling'}" aria-hidden="true"></i>
+      <div>
+        <strong>${escapeHTML(title)}</strong>
+        ${sub ? `<div class="dash-banner-sub">${escapeHTML(sub)}</div>` : ''}
+      </div>
+      ${action ? `<button type="button" class="btn-sm ${action.ghost ? 'btn-ghost' : 'btn-accent'}" id="${escapeHTML(action.id)}">${escapeHTML(action.label)}</button>` : ''}
+    </div>`;
+}
+
+// ======================================================
+// Grid.js tables
+// ======================================================
+
+// Applied to both the header and the body cells of a column, so a numeric
+// column is right-aligned end to end. A data attribute, not a class: Grid.js
+// writes `class` straight onto the cell, replacing the gridjs-th / gridjs-td
+// classes it needs to stay styled.
+export const NUMERIC_COL = () => ({ 'data-align': 'end' });
+export const ACTIONS_COL = () => ({ 'data-align': 'end' });
+
+/**
+ * Destroy the previous grid and render a new one into `container`.
+ *
+ * Columns are `{ name, numeric, actions, sort }`: `numeric` right-aligns,
+ * `actions` right-aligns and disables sorting. Returns the new Grid so the
+ * caller can hold it for the next redraw and for unmount.
+ */
+export function buildGrid(container, prev, columns, rows, { limit = 10, page = 0, empty = 'Nothing here yet.' } = {}) {
+  if (prev) { try { prev.destroy(); } catch (_) {} }
+  if (!container) return null;
+  const cols = columns.map(c => ({
+    name: c.name,
+    ...(c.actions ? { sort: false, attributes: ACTIONS_COL } : {}),
+    ...(c.numeric ? { attributes: NUMERIC_COL } : {}),
+    ...(c.sort === false ? { sort: false } : {}),
+  }));
+  return new Grid({
+    columns: cols,
+    data: rows,
+    pagination: { limit, page: Math.min(Math.max(0, page), Math.max(0, Math.ceil(rows.length / limit) - 1)) },
+    sort: true,
+    language: { noRecordsFound: empty },
+  }).render(container);
+}
+
+// ======================================================
+// Busy buttons
+// ======================================================
+
+/**
+ * Run `fn` with the button disabled and relabelled, then put it back — even
+ * if `fn` throws, and even if the modal it lived in has been closed since.
+ * Resolves to whatever `fn` resolved to.
+ */
+export async function withBusy(btn, label, fn) {
+  if (!btn) return fn();
+  const before = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = label;
+  try {
+    return await fn();
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = before;
+  }
+}
+
+// ======================================================
+// Fatal startup panel
+//
+// Painted when the app cannot start at all — a missing build-time config or
+// an init that threw. style.css may not have loaded by then, so this is the
+// one place hex colours are written inline rather than as tokens.
+// ======================================================
+
+export function fatalPanel(title, messageHTML) {
+  const app = document.getElementById('app');
+  if (!app) return;
+  app.innerHTML =
+    '<div style="max-width:34rem;margin:20vh auto;padding:1.5rem;font-family:Inter,system-ui,sans-serif;color:#e2e8f0;background:#1e293b;border-radius:12px;line-height:1.6">' +
+    `<h1 style="font-size:1.1rem;margin:0 0 .75rem">${escapeHTML(title)}</h1>` +
+    `<p style="margin:0;color:#94a3b8">${messageHTML}</p></div>`;
 }
 
 // ======================================================

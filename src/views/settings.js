@@ -1,6 +1,6 @@
 import * as settings from '../settings.js';
 import { SETTINGS_SCHEMA, SETTING_GROUPS } from '../settings.js';
-import { escapeHTML, showToast, parseNum, formatINR } from '../utils.js';
+import { escapeHTML, showToast, parseNum, formatINR, withBusy } from '../utils.js';
 
 // ======================================================
 // Settings.
@@ -86,6 +86,8 @@ export async function renderSettings(container) {
   renderDerived();
   reflectBar();
 }
+
+export { renderSettings as render };
 
 // ── Markup ─────────────────────────────────────────────
 
@@ -196,11 +198,13 @@ function renderDerived() {
   const el = document.getElementById('set-derived');
   if (!el) return;
 
-  const annual   = draft.monthly_expenses * 12;
-  const target   = annual * draft.fi_multiplier;
-  const surplus  = draft.monthly_net_income - draft.monthly_expenses;
-  const rate     = draft.monthly_net_income > 0 ? (surplus / draft.monthly_net_income) * 100 : 0;
-  const realRet  = ((1 + draft.expected_return / 100) / (1 + draft.inflation_rate / 100) - 1) * 100;
+  // The same functions every other screen derives from, fed the draft rather
+  // than the saved settings — so the preview cannot drift from the real thing.
+  const annual   = settings.annualExpenses(draft);
+  const target   = settings.fiTarget(draft);
+  const surplus  = settings.budgetedSurplus(draft);
+  const rate     = settings.budgetedSavingsRate(draft);
+  const realRet  = settings.realReturnRate(draft) * 100;
 
   const items = [
     { label: 'Annual expenses',       value: formatINR(annual),
@@ -253,14 +257,12 @@ async function save() {
   const keys = changedKeys();
 
   if (!keys.length) { showToast('Nothing to save.'); return; }
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
 
   // Only what actually changed, so untouched keys keep falling back to their
   // defaults instead of being pinned to a copy of the default.
   const patch = Object.fromEntries(keys.map(k => [k, draft[k]]));
-  const { error } = await settings.saveSettings(patch);
+  const { error } = await withBusy(btn, 'Saving…', () => settings.saveSettings(patch));
 
-  if (btn) { btn.disabled = false; btn.textContent = 'Save changes'; }
   if (error) { showToast('Save failed: ' + error.message, 'error'); return; }
 
   saved = settings.all();

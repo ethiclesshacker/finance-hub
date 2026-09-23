@@ -6,7 +6,7 @@ import './vendor.js';
 import { loadSettings } from './settings.js';
 import { renderLogin } from './views/login.js';
 import { renderApp } from './views/app.js';
-import { applyChartDefaults, installCallListener } from './utils.js';
+import { applyChartDefaults, installCallListener, fatalPanel } from './utils.js';
 import './style.css';
 
 // Which user is currently painted on screen.
@@ -72,8 +72,6 @@ async function init() {
 
 init().catch(err => {
   console.error('[init] failed:', err);
-  document.getElementById('app').innerHTML =
-    '<div style="max-width:34rem;margin:20vh auto;padding:1.5rem;font-family:Inter,system-ui,sans-serif;color:#e2e8f0;background:#1e293b;border-radius:12px;line-height:1.6">' +
-    '<h1 style="font-size:1.1rem;margin:0 0 .75rem">Something went wrong starting up</h1>' +
-    '<p style="margin:0;color:#94a3b8">Reload the page. If it keeps happening, check the browser console for details.</p></div>';
+  fatalPanel('Something went wrong starting up',
+    'Reload the page. If it keeps happening, check the browser console for details.');
 });

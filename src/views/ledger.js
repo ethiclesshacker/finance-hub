@@ -17,11 +17,12 @@ import { EVENT_TYPES, STATUSES, SOURCE_TYPES, SUBTYPES, typeMeta, statusMeta, so
 import { parseQuickEntry } from '../ledger/nlparse.js';
 import { summariseItems } from '../ledger/items.js';
 import { localDateISO } from '../ledger/normalize.js';
+import { formatTime as fmtTime, formatDayHeading, toLocalInput } from '../ledger/dates.js';
 import { isInflow, moneyFlow } from '../ledger/summary.js';
 import * as settings from '../settings.js';
 import {
-  escapeHTML, formatINRFull, openModal, closeModal, showToast, todayISO, downloadCSV,
-  comboboxHTML, wireCombobox, renderKpiCards,
+  escapeHTML, formatINRFull, openModal, closeModal, showToast, todayISO, downloadCSV, downloadBlob,
+  comboboxHTML, wireCombobox, renderKpiCards, emptyState,
 } from '../utils.js';
 
 let events = [];
@@ -30,8 +31,14 @@ let total = 0;
 let activeTab = 'timeline';       // timeline | review
 let filters = { query: '', types: [], statuses: [], sourceTypes: [], from: null, to: null };
 let searchDebounce = null;
+// A load that resolves after the user has left must not paint a dead DOM.
+let loadToken = 0;
+// The click-outside handler for the filter panel lives on `document`, so it
+// has to be removed on unmount or every visit stacks another one.
+let docClickHandler = null;
 
 const timeZone = () => settings.get('ledger_timezone') || 'Asia/Kolkata';
+const formatTime = iso => fmtTime(iso, timeZone());
 
 export async function renderLedger(container) {
   activeTab = 'timeline';
@@ -46,7 +53,7 @@ export async function renderLedger(container) {
       <div class="lg-header-right">
         <div class="lg-header-actions">
           <span id="lg-ingest-badge" class="badge badge-gray" title="Last ingestion run">
-            <i class="fas fa-circle-notch fa-spin" style="font-size:0.6rem"></i> Checking…
+            <i class="fas fa-circle-notch fa-spin" aria-hidden="true"></i> Checking…
           </span>
           <button type="button" class="btn-sm btn-ghost" id="lg-export-btn">
             <i class="fas fa-download"></i> Export
@@ -55,18 +62,18 @@ export async function renderLedger(container) {
       </div>
     </div>
 
-    <div class="page-body lg-body lg-page">
+    <div class="page-body lg-body vp-page">
       <div class="kpi-grid lg-kpis" id="lg-stats"></div>
 
-      <div class="table-section lg-panel">
+      <div class="table-section vp-panel">
         <div class="table-toolbar fd-toolbar">
           <div class="table-tabs">
             <button type="button" class="table-tab active" id="lg-tab-timeline">
-              <i class="fas fa-stream" style="margin-right:0.3rem"></i>Timeline
+              <i class="fas fa-stream" aria-hidden="true"></i>Timeline
             </button>
             <button type="button" class="table-tab" id="lg-tab-review">
-              <i class="fas fa-circle-question" style="margin-right:0.3rem"></i>Review
-              <span class="kpi-badge neutral" id="lg-review-count" style="margin-left:0.35rem">0</span>
+              <i class="fas fa-circle-question" aria-hidden="true"></i>Review
+              <span class="kpi-badge neutral" id="lg-review-count">0</span>
             </button>
           </div>
           <div class="lg-controls">
@@ -81,32 +88,32 @@ export async function renderLedger(container) {
                 <span class="lg-filter-count" id="lg-filter-count" hidden></span>
               </summary>
               <div class="lg-filter-grid">
-                <label class="lg-fact">
+                <label class="lg-field">
                   <span>Type</span>
                   <select class="form-select lg-filter" id="lg-filter-type">
                     <option value="">Any</option>
                     ${EVENT_TYPES.map(t => `<option value="${t.id}">${escapeHTML(t.label)}</option>`).join('')}
                   </select>
                 </label>
-                <label class="lg-fact">
+                <label class="lg-field">
                   <span>Source</span>
                   <select class="form-select lg-filter" id="lg-filter-source">
                     <option value="">Any</option>
                     ${SOURCE_TYPES.map(t => `<option value="${t.id}">${escapeHTML(t.label)}</option>`).join('')}
                   </select>
                 </label>
-                <label class="lg-fact">
+                <label class="lg-field">
                   <span>State</span>
                   <select class="form-select lg-filter" id="lg-filter-status">
                     <option value="">Any</option>
                     ${STATUSES.map(t => `<option value="${t.id}">${escapeHTML(t.label)}</option>`).join('')}
                   </select>
                 </label>
-                <label class="lg-fact">
+                <label class="lg-field">
                   <span>From</span>
                   <input type="date" class="form-input lg-filter" id="lg-filter-from" />
                 </label>
-                <label class="lg-fact">
+                <label class="lg-field">
                   <span>To</span>
                   <input type="date" class="form-input lg-filter" id="lg-filter-to" />
                 </label>
@@ -118,7 +125,7 @@ export async function renderLedger(container) {
             </button>
           </div>
         </div>
-        <div class="lg-scroll">
+        <div class="vp-scroll">
           <div id="lg-timeline"></div>
         </div>
       </div>
@@ -163,14 +170,27 @@ export async function renderLedger(container) {
   // The filters are a panel floating over the timeline now, so they need the
   // two things every panel needs: a click outside and Escape both close it.
   const filterPanel = document.getElementById('lg-filters');
-  document.addEventListener('click', e => {
+  if (docClickHandler) document.removeEventListener('click', docClickHandler);
+  docClickHandler = e => {
     if (filterPanel.open && !e.target.closest('#lg-filters')) filterPanel.open = false;
-  });
+  };
+  document.addEventListener('click', docClickHandler);
   filterPanel.addEventListener('keydown', e => {
     if (e.key === 'Escape') { filterPanel.open = false; filterPanel.querySelector('summary').focus(); }
   });
 
   await loadData();
+}
+
+export { renderLedger as render };
+
+/** Drop the document listener and the pending search before the DOM goes. */
+export function unmount() {
+  loadToken++;
+  clearTimeout(searchDebounce);
+  searchDebounce = null;
+  if (docClickHandler) document.removeEventListener('click', docClickHandler);
+  docClickHandler = null;
 }
 
 /** Show how many filters are on, so a narrowed timeline never looks empty. */
@@ -215,6 +235,7 @@ async function switchTab(tab) {
 
 async function loadData() {
   afterMutate = loadData;
+  const token = ++loadToken;
   const container = document.getElementById('lg-timeline');
   if (container) container.innerHTML = `<div class="skeleton skeleton--table"></div>`;
 
@@ -227,6 +248,7 @@ async function loadData() {
       // a day the job has not reached yet simply has none.
       api.dailySummaries(null, null).catch(() => ({})),
     ]);
+    if (token !== loadToken || !container?.isConnected) return;
 
     summaries = written || {};
 
@@ -241,17 +263,13 @@ async function loadData() {
     renderIngestBadge(runs);
     renderTimeline();
   } catch (err) {
+    if (token !== loadToken) return;
     if (container) {
-      container.innerHTML = `
-        <div class="empty-state">
-          <i class="fas fa-triangle-exclamation" style="font-size:1.5rem;color:var(--warning)"></i>
-          <p style="margin-top:0.75rem">Could not load the ledger.</p>
-          <p class="text-muted" style="font-size:0.85rem">${escapeHTML(err.message)}</p>
-          <p class="text-muted" style="font-size:0.8rem;margin-top:0.5rem">
-            If this says a function is missing, the ledger migrations
-            (<code>0003_event_ledger.sql</code>, <code>0004_ledger_api.sql</code>) have not been run yet.
-          </p>
-        </div>`;
+      container.innerHTML = emptyState({
+        icon: 'fa-triangle-exclamation', tone: 'warning',
+        title: 'Could not load the ledger.', hint: err.message,
+        detail: 'If this says a function is missing, the ledger migrations (<code>0003_event_ledger.sql</code>, <code>0004_ledger_api.sql</code>) have not been run yet.',
+      });
     }
   }
 }
@@ -263,7 +281,7 @@ function renderIngestBadge(runs) {
   const last = runs?.[0];
   if (!last) {
     badge.className = 'badge badge-gray';
-    badge.innerHTML = `<i class="fas fa-plug" style="font-size:0.6rem"></i> No ingestion yet`;
+    badge.innerHTML = `<i class="fas fa-plug" aria-hidden="true"></i> No ingestion yet`;
     badge.title = 'Run: npm run ledger:ingest';
     return;
   }
@@ -277,7 +295,7 @@ function renderIngestBadge(runs) {
   const tone = last.status === 'succeeded' ? 'badge-green'
              : last.status === 'partial' ? 'badge-yellow' : 'badge-red';
   badge.className = `badge ${tone}`;
-  badge.innerHTML = `<i class="fas fa-envelope" style="font-size:0.6rem"></i> ${escapeHTML(last.source_type)} · ${ago}`;
+  badge.innerHTML = `<i class="fas fa-envelope" aria-hidden="true"></i> ${escapeHTML(last.source_type)} · ${ago}`;
   badge.title = `${last.status} — ${last.items_seen} seen, ${last.events_created} created, ${last.events_updated} updated`;
 }
 
@@ -338,7 +356,7 @@ function renderTimeline() {
   if (!container) return;
 
   if (!events.length) {
-    container.innerHTML = emptyState();
+    container.innerHTML = timelineEmptyState();
     return;
   }
 
@@ -471,50 +489,29 @@ function stripTrailingAmount(title) {
   return String(title).replace(/\s*[—–-]\s*[+]?[₹$€£]\s*[\d,]+(?:\.\d{1,2})?\s*$/, '').trim() || title;
 }
 
-function emptyState() {
+function timelineEmptyState() {
   const filtered = filters.query || filters.types.length || filters.statuses.length
                 || filters.sourceTypes.length || filters.from || filters.to;
 
   if (activeTab === 'review') {
-    return `
-      <div class="empty-state">
-        <i class="fas fa-circle-check" style="font-size:1.5rem;color:var(--success)"></i>
-        <p style="margin-top:0.75rem">Nothing waiting for review.</p>
-        <p class="text-muted" style="font-size:0.85rem">Uncertain extractions land here to be confirmed, corrected, merged or dismissed.</p>
-      </div>`;
+    return emptyState({
+      icon: 'fa-circle-check', tone: 'success', title: 'Nothing waiting for review.',
+      hint: 'Uncertain extractions land here to be confirmed, corrected, merged or dismissed.',
+    });
   }
 
   if (filtered) {
-    return `
-      <div class="empty-state">
-        <i class="fas fa-filter-circle-xmark" style="font-size:1.5rem;color:var(--text-muted)"></i>
-        <p style="margin-top:0.75rem">No events match those filters.</p>
-      </div>`;
+    return emptyState({ icon: 'fa-filter-circle-xmark', title: 'No events match those filters.' });
   }
 
-  return `
-    <div class="empty-state">
-      <i class="fas fa-stream" style="font-size:1.5rem;color:var(--accent)"></i>
-      <p style="margin-top:0.75rem">The ledger is empty.</p>
-      <p class="text-muted" style="font-size:0.85rem;max-width:34rem;margin:0.5rem auto 0">
-        It is meant to fill itself. Connect a mailbox in <code>ledger/accounts.json</code> and run
-        <code>npm run ledger:ingest</code> — or add something by hand with the + button.
-      </p>
-    </div>`;
-}
-
-function formatTime(iso) {
-  return new Date(iso).toLocaleTimeString('en-IN', {
-    hour: '2-digit', minute: '2-digit', hour12: false, timeZone: timeZone(),
+  return emptyState({
+    icon: 'fa-stream', tone: 'accent', title: 'The ledger is empty.',
+    detail: 'It is meant to fill itself. Connect a mailbox in <code>ledger/accounts.json</code> and run '
+          + '<code>npm run ledger:ingest</code> — or add something by hand with the + button.',
   });
 }
 
-function formatDayHeading(day) {
-  const [y, m, d] = day.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-IN', {
-    weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC',
-  });
-}
+
 
 // ── Detail ─────────────────────────────────────────────
 
@@ -535,14 +532,7 @@ export function openEventDetail(eventId, onChange) {
 }
 
 async function openDetail(eventId) {
-  openModal(`
-    <div class="modal-header">
-      <div class="modal-title">Event</div>
-      <button class="modal-close" id="lg-detail-close"><i class="fas fa-times"></i></button>
-    </div>
-    <div class="modal-body"><div class="skeleton skeleton--table"></div></div>
-  `);
-  document.getElementById('lg-detail-close').addEventListener('click', closeModal);
+  openModal({ title: 'Event', body: '<div class="skeleton skeleton--table"></div>' });
 
   let event;
   try {
@@ -559,16 +549,10 @@ async function openDetail(eventId) {
   const automatic = event.source_type !== 'manual' && event.source_type !== 'hermes';
   const needsAttention = event.status === 'needs_review' || event.status === 'inferred';
 
-  openModal(`
-    <div class="modal-header">
-      <div class="modal-title">
-        <i class="fas ${type.icon}" style="color:${type.color};margin-right:0.5rem" aria-hidden="true"></i>
-        ${escapeHTML(stripTrailingAmount(event.title))}
-      </div>
-      <button class="modal-close" id="lg-detail-close"><i class="fas fa-times"></i></button>
-    </div>
-
-    <div class="modal-body">
+  openModal({
+    title: stripTrailingAmount(event.title),
+    icon: type.icon, iconColor: type.color,
+    body: `
       <div class="lg-detail-head">
         <div class="lg-detail-when">
           <span class="mono">${escapeHTML(formatFullTime(event.occurred_at))}${
@@ -577,7 +561,7 @@ async function openDetail(eventId) {
             ${escapeHTML(type.label)}${event.subtype ? ` · ${escapeHTML(event.subtype.replace(/_/g, ' '))}` : ''}
           </span>
         </div>
-        <div style="display:flex;gap:0.4rem;align-items:center;flex-wrap:wrap">
+        <div class="lg-detail-badges">
           <span class="badge ${status.badge}" title="${escapeHTML(status.hint)}">${escapeHTML(status.label)}</span>
           <span class="badge ${automatic ? 'badge-blue' : 'badge-gray'}">
             ${automatic ? 'Extracted automatically' : 'Entered by you'}
@@ -597,21 +581,16 @@ async function openDetail(eventId) {
       ${section('Sources', renderSources(event.sources), 'Every piece of evidence for this event.')}
       ${event.entities?.length ? section('Entities', renderEntities(event.entities)) : ''}
       ${event.related_events?.length ? section('Related events', renderRelated(event.related_events)) : ''}
-      ${event.history?.length ? section('History', renderHistory(event.history), 'Corrections are kept, not silently applied.') : ''}
-    </div>
-
-    <div class="modal-footer" style="flex-wrap:wrap;gap:0.4rem">
-      ${needsAttention ? `<button class="btn-sm btn-accent" id="lg-confirm-btn"><i class="fas fa-check"></i> Confirm</button>` : ''}
-      <button class="btn-sm btn-ghost" id="lg-merge-btn"><i class="fas fa-code-merge"></i> Merge</button>
-      <button class="btn-sm btn-ghost" id="lg-edit-btn"><i class="fas fa-pencil"></i> Edit</button>
-      <button class="btn-sm btn-ghost" id="lg-dismiss-btn"><i class="fas fa-ban"></i> Dismiss</button>
-      <button class="btn-sm btn-danger" id="lg-delete-btn"><i class="fas fa-trash"></i> Delete</button>
-      <button class="btn-cancel" id="lg-detail-cancel">Close</button>
-    </div>
-  `);
-
-  document.getElementById('lg-detail-close').addEventListener('click', closeModal);
-  document.getElementById('lg-detail-cancel').addEventListener('click', closeModal);
+      ${event.history?.length ? section('History', renderHistory(event.history), 'Corrections are kept, not silently applied.') : ''}`,
+    footerClass: 'is-wrap',
+    footer: `
+      ${needsAttention ? `<button type="button" class="btn-sm btn-accent" id="lg-confirm-btn"><i class="fas fa-check"></i> Confirm</button>` : ''}
+      <button type="button" class="btn-sm btn-ghost" id="lg-merge-btn"><i class="fas fa-code-merge"></i> Merge</button>
+      <button type="button" class="btn-sm btn-ghost" id="lg-edit-btn"><i class="fas fa-pencil"></i> Edit</button>
+      <button type="button" class="btn-sm btn-ghost" id="lg-dismiss-btn"><i class="fas fa-ban"></i> Dismiss</button>
+      <button type="button" class="btn-sm btn-danger" id="lg-delete-btn"><i class="fas fa-trash"></i> Delete</button>
+      <button type="button" class="btn-cancel" data-close>Close</button>`,
+  });
 
   document.getElementById('lg-confirm-btn')?.addEventListener('click', async () => {
     await mutate(() => api.updateEvent(event.id, { status: 'confirmed' }), 'Confirmed.');
@@ -685,14 +664,14 @@ function formatValue(key, value) {
 }
 
 function renderSources(sources) {
-  if (!sources?.length) return `<p class="text-muted" style="font-size:0.85rem">No source recorded — this event was created directly.</p>`;
+  if (!sources?.length) return `<p class="modal-note">No source recorded — this event was created directly.</p>`;
   return `<div class="lg-sources">${sources.map(source => {
     const meta = sourceMeta(source.source_type);
     const subject = source.metadata?.subject;
     return `
       <div class="lg-source">
-        <i class="fas ${meta.icon}" style="color:var(--accent)" aria-hidden="true"></i>
-        <div style="flex:1;min-width:0">
+        <i class="fas ${meta.icon}" aria-hidden="true"></i>
+        <div class="lg-source-body">
           <div class="lg-source-title">${escapeHTML(subject || meta.label)}</div>
           <div class="lg-source-meta">
             ${escapeHTML(source.role)} · ${escapeHTML(source.extracted_by || 'unknown')}
@@ -719,7 +698,7 @@ function renderRelated(related) {
   return `<div class="lg-sources">${related.map(item => `
     <div class="lg-source">
       <i class="fas ${typeMeta(item.type).icon}" style="color:${typeMeta(item.type).color}" aria-hidden="true"></i>
-      <div style="flex:1;min-width:0">
+      <div class="lg-source-body">
         <div class="lg-source-title">${escapeHTML(item.title)}</div>
         <div class="lg-source-meta">${escapeHTML(item.relationship.replace(/_/g, ' '))} · ${escapeHTML(formatFullTime(item.occurred_at))}</div>
       </div>
@@ -758,13 +737,9 @@ function formatFullTime(iso) {
  * reachable. Whatever the parser guessed is shown as a guess.
  */
 function openQuickAdd() {
-  openModal(`
-    <div class="modal-header">
-      <div class="modal-title">Add an event</div>
-      <button class="modal-close" id="lg-add-close"><i class="fas fa-times"></i></button>
-    </div>
-
-    <div class="modal-body">
+  openModal({
+    title: 'Add an event',
+    body: `
       <div class="form-group">
         <label class="form-label" for="lg-add-input">What happened?</label>
         <input type="text" class="form-input" id="lg-add-input" autocomplete="off"
@@ -801,20 +776,17 @@ function openQuickAdd() {
           </div>
         </div>
         <div class="form-group">
-          <label class="form-label">
-            <input type="checkbox" id="lg-add-separate" style="margin-right:0.4rem" />
+          <label class="form-label form-check">
+            <input type="checkbox" id="lg-add-separate" />
             Keep this separate even if a similar event already exists
           </label>
           <div class="form-hint">By default a matching event absorbs this as extra evidence instead of being duplicated.</div>
         </div>
-      </details>
-    </div>
-
-    <div class="modal-footer">
-      <button class="btn-cancel" id="lg-add-cancel">Cancel</button>
-      <button class="btn-submit" id="lg-add-submit">Add event</button>
-    </div>
-  `);
+      </details>`,
+    footer: `
+      <button type="button" class="btn-cancel" data-close>Cancel</button>
+      <button type="button" class="btn-submit" id="lg-add-submit">Add event</button>`,
+  });
 
   const input = document.getElementById('lg-add-input');
   const preview = document.getElementById('lg-add-preview');
@@ -860,9 +832,6 @@ function openQuickAdd() {
 
   input.addEventListener('input', update);
   input.focus();
-
-  document.getElementById('lg-add-close').addEventListener('click', closeModal);
-  document.getElementById('lg-add-cancel').addEventListener('click', closeModal);
 
   document.getElementById('lg-add-submit').addEventListener('click', async () => {
     const text = input.value.trim();
@@ -918,11 +887,6 @@ function knownSubtypes(type) {
   return [...new Set([...seen, ...(SUBTYPES[type] || [])])];
 }
 
-function toLocalInput(iso) {
-  const date = new Date(iso);
-  const pad = n => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
 
 // ── Edit ───────────────────────────────────────────────
 
@@ -932,13 +896,9 @@ function toLocalInput(iso) {
  * trusting if fixing it is easy. The previous values survive in the audit log.
  */
 function openEdit(event) {
-  openModal(`
-    <div class="modal-header">
-      <div class="modal-title">Edit event</div>
-      <button class="modal-close" id="lg-edit-close"><i class="fas fa-times"></i></button>
-    </div>
-
-    <div class="modal-body">
+  openModal({
+    title: 'Edit event',
+    body: `
       <div class="form-row">
         <div class="form-group">
           <label class="form-label" for="lg-e-when">When</label>
@@ -972,8 +932,7 @@ function openEdit(event) {
       </div>
       <div class="form-group">
         <label class="form-label" for="lg-e-data">Facts (JSON)</label>
-        <textarea class="form-input" id="lg-e-data" rows="7" spellcheck="false"
-                  style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:0.8rem">${escapeHTML(JSON.stringify(event.data || {}, null, 2))}</textarea>
+        <textarea class="form-input is-code" id="lg-e-data" rows="7" spellcheck="false">${escapeHTML(JSON.stringify(event.data || {}, null, 2))}</textarea>
         <div class="form-hint">
           What the sources stated. Editing here is a correction by you and replaces the extracted value.
         </div>
@@ -984,18 +943,15 @@ function openEdit(event) {
           ${STATUSES.filter(s => s.id !== 'dismissed').map(s =>
             `<option value="${s.id}" ${s.id === event.status ? 'selected' : ''}>${escapeHTML(s.label)}</option>`).join('')}
         </select>
-      </div>
-    </div>
-
-    <div class="modal-footer">
-      <button class="btn-cancel" id="lg-edit-cancel">Cancel</button>
-      <button class="btn-submit" id="lg-edit-save">Save changes</button>
-    </div>
-  `);
+      </div>`,
+    footer: `
+      <button type="button" class="btn-cancel" id="lg-edit-cancel">Cancel</button>
+      <button type="button" class="btn-submit" id="lg-edit-save">Save changes</button>`,
+  });
 
   wireCombobox('lg-e-subtype');
 
-  document.getElementById('lg-edit-close').addEventListener('click', closeModal);
+  // Cancel goes back to the detail it came from; the × closes outright.
   document.getElementById('lg-edit-cancel').addEventListener('click', () => openDetail(event.id));
 
   document.getElementById('lg-edit-save').addEventListener('click', async () => {
@@ -1023,14 +979,7 @@ function openEdit(event) {
 // ── Merge ──────────────────────────────────────────────
 
 async function openMerge(event) {
-  openModal(`
-    <div class="modal-header">
-      <div class="modal-title">Merge duplicates</div>
-      <button class="modal-close" id="lg-merge-close"><i class="fas fa-times"></i></button>
-    </div>
-    <div class="modal-body"><div class="skeleton skeleton--strip"></div></div>
-  `);
-  document.getElementById('lg-merge-close').addEventListener('click', closeModal);
+  openModal({ title: 'Merge duplicates', body: '<div class="skeleton skeleton--strip"></div>' });
 
   let candidates = [];
   try {
@@ -1039,20 +988,16 @@ async function openMerge(event) {
     showToast(err.message, 'error');
   }
 
-  openModal(`
-    <div class="modal-header">
-      <div class="modal-title">Merge into “${escapeHTML(event.title)}”</div>
-      <button class="modal-close" id="lg-merge-close"><i class="fas fa-times"></i></button>
-    </div>
-
-    <div class="modal-body">
-      <p class="text-muted" style="font-size:0.85rem;margin-bottom:0.75rem">
+  openModal({
+    title: `Merge into “${event.title}”`,
+    body: `
+      <p class="modal-note">
         Pick the event that describes the same real-world thing. Its sources move across and this event keeps its facts.
       </p>
       ${candidates.length ? `<div class="lg-sources">${candidates.map(candidate => `
         <div class="lg-source">
           <i class="fas ${typeMeta(candidate.type).icon}" style="color:${typeMeta(candidate.type).color}" aria-hidden="true"></i>
-          <div style="flex:1;min-width:0">
+          <div class="lg-source-body">
             <div class="lg-source-title">${escapeHTML(candidate.title)}</div>
             <div class="lg-source-meta">
               ${escapeHTML(formatFullTime(candidate.occurred_at))} ·
@@ -1060,17 +1005,13 @@ async function openMerge(event) {
               name similarity ${escapeHTML(String(candidate.similarity))}
             </div>
           </div>
-          <button class="btn-sm btn-accent lg-merge-pick" data-id="${escapeHTML(candidate.id)}">Merge</button>
+          <button type="button" class="btn-sm btn-accent lg-merge-pick" data-id="${escapeHTML(candidate.id)}">Merge</button>
         </div>`).join('')}</div>`
-      : `<p class="text-muted">Nothing similar found nearby in time.</p>`}
-    </div>
+      : `<p class="modal-note">Nothing similar found nearby in time.</p>`}`,
+    footer: `<button type="button" class="btn-cancel" id="lg-merge-cancel">Close</button>`,
+  });
 
-    <div class="modal-footer">
-      <button class="btn-cancel" id="lg-merge-cancel">Close</button>
-    </div>
-  `);
-
-  document.getElementById('lg-merge-close').addEventListener('click', closeModal);
+  // Close goes back to the detail it came from; the × closes outright.
   document.getElementById('lg-merge-cancel').addEventListener('click', () => openDetail(event.id));
 
   document.querySelectorAll('.lg-merge-pick').forEach(button => {
@@ -1083,29 +1024,22 @@ async function openMerge(event) {
 // ── Export ─────────────────────────────────────────────
 
 function exportLedger() {
-  openModal(`
-    <div class="modal-header">
-      <div class="modal-title">Export</div>
-      <button class="modal-close" id="lg-x-close"><i class="fas fa-times"></i></button>
-    </div>
-    <div class="modal-body">
-      <p class="text-muted" style="font-size:0.87rem">
+  openModal({
+    title: 'Export',
+    body: `
+      <p class="modal-note">
         Your ledger, in formats nothing else has to be running to read.
       </p>
-      <div style="display:flex;flex-direction:column;gap:0.6rem;margin-top:0.9rem">
-        <button class="btn-primary" id="lg-x-csv">
+      <div class="modal-stack">
+        <button type="button" class="btn-primary" id="lg-x-csv">
           <i class="fas fa-file-csv"></i> Events on screen, as CSV
         </button>
-        <button class="btn-primary" id="lg-x-json">
+        <button type="button" class="btn-primary" id="lg-x-json">
           <i class="fas fa-file-code"></i> Everything, as JSON — events, sources, entities, summaries
         </button>
-      </div>
-    </div>
-    <div class="modal-footer"><button class="btn-cancel" id="lg-x-cancel">Close</button></div>
-  `);
-
-  document.getElementById('lg-x-close').addEventListener('click', closeModal);
-  document.getElementById('lg-x-cancel').addEventListener('click', closeModal);
+      </div>`,
+    footer: `<button type="button" class="btn-cancel" data-close>Close</button>`,
+  });
 
   document.getElementById('lg-x-csv').addEventListener('click', () => {
     downloadCSV(
@@ -1123,13 +1057,7 @@ function exportLedger() {
   document.getElementById('lg-x-json').addEventListener('click', async () => {
     try {
       const payload = await api.exportLedger(null, null);
-      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `ledger-export-${todayISO()}.json`;
-      link.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(JSON.stringify(payload, null, 2), 'application/json', `ledger-export-${todayISO()}.json`);
       closeModal();
     } catch (err) {
       showToast('Export failed: ' + err.message, 'error');

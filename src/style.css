@@ -212,21 +212,21 @@ input, select, textarea {
 
 .login-bg-orb.orb1 {
   width: 500px; height: 500px;
-  background: radial-gradient(circle, rgba(56,189,248,0.12) 0%, transparent 70%);
+  background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
   top: -100px; left: -100px;
   animation: float1 8s ease-in-out infinite;
 }
 
 .login-bg-orb.orb2 {
   width: 400px; height: 400px;
-  background: radial-gradient(circle, rgba(167,139,250,0.10) 0%, transparent 70%);
+  background: radial-gradient(circle, var(--purple-glow) 0%, transparent 70%);
   bottom: -80px; right: -80px;
   animation: float2 10s ease-in-out infinite;
 }
 
 .login-bg-orb.orb3 {
   width: 300px; height: 300px;
-  background: radial-gradient(circle, rgba(16,185,129,0.08) 0%, transparent 70%);
+  background: radial-gradient(circle, var(--success-glow) 0%, transparent 70%);
   top: 50%; left: 50%;
   transform: translate(-50%, -50%);
   animation: float3 12s ease-in-out infinite;
@@ -257,7 +257,7 @@ input, select, textarea {
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   padding: 2.5rem;
-  box-shadow: var(--shadow-lg), 0 0 60px rgba(56,189,248,0.05);
+  box-shadow: var(--shadow-lg), 0 0 60px var(--accent-dim);
   animation: fadeSlideUp 0.5s ease-out;
 }
 
@@ -282,7 +282,7 @@ input, select, textarea {
   font-size: var(--fs-xl);
   color: var(--bg-dark);
   margin-bottom: var(--sp-4);
-  box-shadow: 0 0 32px rgba(56,189,248,0.3);
+  box-shadow: var(--shadow-accent);
 }
 
 .login-logo h1 {
@@ -342,11 +342,6 @@ input, select, textarea {
   outline: none;
 }
 
-.login-form-group input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-dim);
-}
-
 .btn-primary {
   width: 100%;
   padding: 0.9rem 1.5rem;
@@ -360,6 +355,7 @@ input, select, textarea {
   position: relative;
   overflow: hidden;
 }
+.btn-primary i { margin-right: var(--sp-2); }
 
 .btn-primary::before {
   content: '';
@@ -391,14 +387,14 @@ input, select, textarea {
 .login-status.success {
   display: block;
   background: var(--success-dim);
-  border: 1px solid rgba(16,185,129,0.25);
+  border: 1px solid var(--success-glow);
   color: var(--success);
 }
 
 .login-status.error {
   display: block;
   background: var(--danger-dim);
-  border: 1px solid rgba(239,68,68,0.25);
+  border: 1px solid var(--danger-glow);
   color: var(--danger);
 }
 
@@ -476,7 +472,7 @@ input, select, textarea {
   font-size: var(--fs-base);
   color: var(--bg-dark);
   flex-shrink: 0;
-  box-shadow: 0 0 16px rgba(56,189,248,0.25);
+  box-shadow: var(--shadow-accent);
 }
 
 .sidebar-logo-text {
@@ -504,16 +500,6 @@ input, select, textarea {
   flex: 1;
   padding: 1rem 0.75rem;
   overflow-y: auto;
-}
-
-.sidebar-section-label {
-  font-size: var(--fs-xs);
-  font-weight: 700;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  padding: 0.5rem 0.5rem 0.25rem;
-  margin-top: 0.5rem;
 }
 
 .nav-item {
@@ -719,6 +705,14 @@ input, select, textarea {
   flex: 1;
 }
 
+/* The buttons and badges on the right of a page header. */
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
 /* ============================================================
    KPI CARDS
    ============================================================ */
@@ -877,35 +871,6 @@ input, select, textarea {
   color: var(--text-secondary);
 }
 
-/* Tooltip */
-.tooltip-wrap {
-  position: relative;
-  display: inline-flex;
-}
-.tooltip-wrap .tooltip-content {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 0.5rem 0.75rem;
-  font-size: var(--fs-xs);
-  color: var(--text-secondary);
-  white-space: nowrap;
-  max-width: 220px;
-  white-space: normal;
-  text-align: center;
-  line-height: 1.4;
-  z-index: 50;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity var(--transition);
-  box-shadow: var(--shadow-md);
-}
-.tooltip-wrap:hover .tooltip-content { opacity: 1; }
-
 /* Copied feedback */
 .kpi-card.copied::after {
   content: 'Copied!';
@@ -975,7 +940,10 @@ input, select, textarea {
   margin-top: 0.15rem;
 }
 
-.chart-toggle {
+/* A segmented control: the chart's line/bar switch and a table's tabs are
+   the same tray, with different buttons in it. */
+.chart-toggle,
+.table-tabs {
   display: flex;
   gap: 0.25rem;
   background: var(--bg-elevated);
@@ -1037,18 +1005,10 @@ input, select, textarea {
   .lg-search { flex: 1 1 auto; max-width: none; }
 }
 
-.table-tabs {
-  display: flex;
-  gap: 0.25rem;
-  background: var(--bg-elevated);
-  border-radius: var(--radius-sm);
-  padding: 3px;
-}
-
 .table-tab {
   display: inline-flex;
   align-items: center;
-  gap: var(--sp-1);
+  gap: var(--sp-2);
   min-height: calc(var(--control-h) - 6px);
   padding: 0 var(--sp-4);
   font-size: var(--fs-sm);
@@ -1067,6 +1027,30 @@ input, select, textarea {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+}
+
+/* The heading on a table toolbar that has no tabs. */
+.table-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-base);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.table-title i { color: var(--accent); }
+
+/* A filter dropdown in a toolbar: control height, content width. Four of
+   these carried the same inline style and no arrow. */
+.form-select.toolbar-select {
+  width: auto;
+  min-width: 8rem;
+  max-width: 12rem;
+  height: var(--control-h);
+  padding: 0 2rem 0 var(--sp-3);
+  font-size: var(--fs-sm);
+  border-radius: var(--radius-sm);
+  background-position: right var(--sp-2) center;
 }
 
 .search-input-wrap {
@@ -1095,8 +1079,6 @@ input, select, textarea {
   outline: none;
   transition: border-color var(--transition), box-shadow var(--transition);
 }
-.search-input:focus { box-shadow: 0 0 0 3px var(--accent-dim); }
-.search-input:focus { border-color: var(--accent); }
 
 .btn-icon {
   width: var(--control-h);
@@ -1137,16 +1119,16 @@ input, select, textarea {
   color: var(--accent);
 }
 .btn-sm.btn-accent:hover {
-  background: rgba(56,189,248,0.15);
+  background: var(--accent-glow);
 }
 
 .btn-sm.btn-danger {
   background: var(--danger-dim);
-  border: 1px solid rgba(239,68,68,0.2);
+  border: 1px solid var(--danger-glow);
   color: var(--danger);
 }
 .btn-sm.btn-danger:hover {
-  background: rgba(239,68,68,0.15);
+  background: var(--danger-glow);
 }
 
 .btn-sm.btn-ghost {
@@ -1289,7 +1271,7 @@ input, select, textarea {
 .btn-icon.is-danger:hover {
   color: var(--danger);
   background: var(--danger-dim);
-  border-color: rgba(248, 113, 113, 0.35);
+  border-color: var(--danger-glow);
 }
 
 .gridjs-footer {
@@ -1421,6 +1403,21 @@ input, select, textarea {
   font-weight: 700;
   color: var(--text-primary);
 }
+.modal-title i { margin-right: var(--sp-2); }
+
+/* A sentence of context at the top of a modal body. */
+.modal-note {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  margin-bottom: var(--sp-3);
+}
+/* Full-width choices stacked in a modal body. */
+.modal-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin-top: var(--sp-4);
+}
 
 .modal-close {
   width: 28px;
@@ -1492,9 +1489,21 @@ input, select, textarea {
   -webkit-appearance: none;
 }
 
-.form-input:focus, .form-select:focus {
+/* One focus ring for every text control. This was written four times —
+   login input, search box, form controls, the settings affix box. */
+.login-form-group input:focus,
+.search-input:focus,
+.form-input:focus,
+.form-select:focus,
+.set-input:focus-within {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+/* A JSON / code field. */
+.form-input.is-code {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: var(--fs-sm);
 }
 
 .form-input::placeholder,
@@ -1518,6 +1527,53 @@ input, select, textarea {
   color: var(--text-muted);
   margin-top: 0.3rem;
 }
+
+/* A label wrapping its own checkbox. */
+.form-label.form-check { display: flex; align-items: center; gap: var(--sp-2); text-transform: none; letter-spacing: 0; }
+
+/* An eyebrow between groups of fields — "Assets", "Liabilities". */
+.form-section {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin: var(--sp-2) 0 var(--sp-3);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+.form-section.is-success { color: var(--success); }
+.form-section.is-danger  { color: var(--danger); }
+
+/* The live figure under a form: what the values typed so far add up to. */
+.form-preview {
+  margin-top: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+}
+.form-preview-label {
+  margin-bottom: var(--sp-2);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
+}
+.form-preview-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  color: var(--text-secondary);
+}
+.form-preview-row + .form-preview-row { margin-top: var(--sp-1); }
+.form-preview-muted { color: var(--text-muted); }
+.form-preview-value { font-weight: 700; color: var(--success); }
+.form-preview-value.is-accent { font-weight: 800; font-size: var(--fs-md); color: var(--accent); }
+.form-preview-value.is-danger { color: var(--danger); }
 
 .form-row {
   display: grid;
@@ -1562,6 +1618,8 @@ input, select, textarea {
 .btn-submit:hover { opacity: 0.9; }
 .btn-submit:active { transform: scale(0.98); }
 .btn-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+/* A footer that is a row of small actions rather than cancel + submit. */
+.modal-footer.is-wrap { flex-wrap: wrap; gap: var(--sp-2); }
 
 /* ============================================================
    DASHBOARD — COMPACT HEADER + POINTS STRIP
@@ -1619,6 +1677,8 @@ input, select, textarea {
   color: var(--text-secondary);
   margin-top: 0.2rem;
 }
+.dash-nw-change .is-up   { color: var(--success); }
+.dash-nw-change .is-down { color: var(--danger); }
 
 /* Inline points strip */
 .points-strip {
@@ -1656,6 +1716,10 @@ input, select, textarea {
   line-height: 1.1;
   margin-bottom: 0.2rem;
 }
+.psi-value.is-success { color: var(--success); }
+.psi-value.is-danger  { color: var(--danger); }
+.psi-value.is-accent  { color: var(--accent); }
+.psi-value.is-warning { color: var(--warning); }
 
 .psi-sub {
   font-size: var(--fs-xs);
@@ -1665,20 +1729,10 @@ input, select, textarea {
 /* ============================================================
    UTILITY CLASSES
    ============================================================ */
-.text-accent { color: var(--accent) !important; }
-.text-success { color: var(--success) !important; }
 .text-danger { color: var(--danger) !important; }
-.text-warning { color: var(--warning) !important; }
 .text-muted { color: var(--text-muted) !important; }
-.text-secondary { color: var(--text-secondary) !important; }
 
 .mono { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
-
-.separator {
-  height: 1px;
-  background: var(--border);
-  margin: 1.5rem 0;
-}
 
 .badge {
   display: inline-flex;
@@ -1690,12 +1744,13 @@ input, select, textarea {
   font-weight: 700;
   letter-spacing: 0.04em;
 }
+.badge > i { font-size: 0.8em; }
 .badge-blue { background: var(--accent-dim); color: var(--accent); border: 1px solid var(--border-accent); }
-.badge-green { background: var(--success-dim); color: var(--success); border: 1px solid rgba(16,185,129,0.2); }
-.badge-red { background: var(--danger-dim); color: var(--danger); border: 1px solid rgba(239,68,68,0.2); }
-.badge-yellow { background: var(--warning-dim); color: var(--warning); border: 1px solid rgba(245,158,11,0.2); }
-.badge-purple { background: var(--purple-dim); color: var(--purple); border: 1px solid rgba(167,139,250,0.2); }
-.badge-gray { background: rgba(148,163,184,0.1); color: var(--text-muted); border: 1px solid rgba(148,163,184,0.15); }
+.badge-green { background: var(--success-dim); color: var(--success); border: 1px solid var(--success-glow); }
+.badge-red { background: var(--danger-dim); color: var(--danger); border: 1px solid var(--danger-glow); }
+.badge-yellow { background: var(--warning-dim); color: var(--warning); border: 1px solid var(--warning-glow); }
+.badge-purple { background: var(--purple-dim); color: var(--purple); border: 1px solid var(--purple-glow); }
+.badge-gray { background: var(--bg-elevated); color: var(--text-muted); border: 1px solid var(--border); }
 
 /* Progress bar */
 .progress-wrap {
@@ -1755,27 +1810,40 @@ input, select, textarea {
   100% { background-position: -200% 0; }
 }
 
-/* Empty state */
+/* Empty state — rendered by emptyState() in utils.js. The icon takes the
+   tone; the words stay in the text palette. */
 .empty-state {
   text-align: center;
-  padding: 3rem 2rem;
+  padding: var(--sp-12) var(--sp-8);
   color: var(--text-muted);
 }
-.empty-state i {
-  font-size: var(--fs-3xl);
-  margin-bottom: 1rem;
-  opacity: 0.4;
+.empty-state > i {
+  display: block;
+  font-size: var(--fs-xl);
+  margin-bottom: var(--sp-3);
+  color: var(--text-muted);
 }
-.empty-state h4 {
+.empty-state.is-accent  > i { color: var(--accent); }
+.empty-state.is-success > i { color: var(--success); }
+.empty-state.is-warning > i { color: var(--warning); }
+.empty-state.is-danger  > i { color: var(--danger); }
+.empty-state-title {
   font-size: var(--fs-md);
   font-weight: 600;
   color: var(--text-secondary);
-  margin-bottom: 0.5rem;
 }
-.empty-state p {
+.empty-state-hint {
+  max-width: 34rem;
+  margin: var(--sp-2) auto 0;
   font-size: var(--fs-sm);
   line-height: 1.5;
 }
+.empty-state-hint code {
+  background: var(--bg-elevated);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+.empty-state-action { margin-top: var(--sp-4); }
 
 /* ============================================================
    MOBILE / RESPONSIVE
@@ -1901,9 +1969,9 @@ input, select, textarea {
 .dash-banner i { font-size: var(--fs-lg); flex-shrink: 0; }
 .dash-banner > div { flex: 1; min-width: 0; }
 .dash-banner-sub { color: var(--text-muted); font-size: var(--fs-sm); margin-top: 0.15rem; }
-.dash-banner--error { border-color: rgba(239, 68, 68, 0.35); }
+.dash-banner--error { border-color: var(--danger-glow); }
 .dash-banner--error i { color: var(--danger); }
-.dash-banner--empty { border-color: rgba(56, 189, 248, 0.3); }
+.dash-banner--empty { border-color: var(--border-accent); }
 .dash-banner--empty i { color: var(--accent); }
 
 /* ============================================================
@@ -1958,6 +2026,13 @@ input, select, textarea {
 .fi-toggle { min-height: var(--control-h); padding-right: var(--sp-1); }
 
 .fi-sliders { display: flex; flex-direction: column; gap: 1.1rem; }
+.fi-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+}
 .fi-slider-head {
   display: flex;
   justify-content: space-between;
@@ -1990,7 +2065,11 @@ input, select, textarea {
 .fi-milestone-mark { color: var(--text-muted); font-size: var(--fs-sm); width: 1rem; text-align: center; }
 .fi-milestone.is-reached .fi-milestone-mark { color: var(--success); }
 .fi-milestone-body { flex: 1; min-width: 0; }
-.fi-milestone-label { font-size: var(--fs-base); font-weight: 600; color: var(--text-primary); }
+/* The title of a list row: milestones, dishes, reconcile rows, workouts. */
+.fi-milestone-label,
+.dd-name,
+.pt-rc-title,
+.hl-row-title { font-size: var(--fs-base); font-weight: 600; color: var(--text-primary); }
 .fi-milestone-amount { font-size: var(--fs-sm); color: var(--text-muted); }
 .fi-milestone-eta { font-size: var(--fs-sm); color: var(--text-secondary); white-space: nowrap; }
 
@@ -2147,7 +2226,6 @@ input, select, textarea {
   border-radius: var(--radius-md);
   transition: border-color var(--transition), box-shadow var(--transition);
 }
-.set-input:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 
 .set-input .form-input {
   flex: 1;
@@ -2448,7 +2526,7 @@ input, select, textarea {
 /* Extracted-but-not-certain is the common case, so it is a dimmed edge rather
    than a badge on every row — a badge that appears everywhere stops being
    read. Genuine uncertainty gets the flag in .tl-flag instead. */
-.tl-item.is-inferred { border-left-color: rgba(148, 163, 184, 0.22); }
+.tl-item.is-inferred { border-left-color: var(--border-hover); }
 .tl-item.is-review   { border-left-color: var(--warning); background: var(--warning-dim); }
 
 .tl-when {
@@ -2527,12 +2605,12 @@ input, select, textarea {
   border-radius: var(--radius-sm);
   color: var(--warning);
   background: var(--warning-dim);
-  border: 1px solid rgba(245, 158, 11, 0.25);
+  border: 1px solid var(--warning-glow);
 }
 .tl-flag.is-scheduled {
   color: var(--purple);
   background: var(--purple-dim);
-  border-color: rgba(167, 139, 250, 0.25);
+  border-color: var(--purple-glow);
 }
 
 /* One column, right-aligned, tabular: the figures stack into a readable
@@ -2580,6 +2658,7 @@ input, select, textarea {
 /* Without this the line reads as one run-on phrase: "18:28 Purchase · card
    transaction". The date and the kind are two facts, not a sentence. */
 .lg-detail-kind::before { content: '·'; margin-right: 0.5rem; opacity: 0.55; }
+.lg-detail-badges { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; }
 
 
 .lg-detail-desc {
@@ -2662,6 +2741,8 @@ input, select, textarea {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
+.lg-source > i { color: var(--accent); }
+.lg-source-body { flex: 1; min-width: 0; }
 .lg-source-title {
   font-size: var(--fs-sm);
   font-weight: 600;
@@ -2756,31 +2837,6 @@ input, select, textarea {
 
 .lg-header-right { display: flex; flex-direction: column; align-items: flex-end; gap: 0.6rem; flex: 1 1 auto; }
 .lg-header-actions { display: flex; gap: 0.5rem; align-items: center; }
-.lg-stats { display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }
-
-.lg-stat {
-  display: grid;
-  grid-template-columns: auto auto;
-  grid-template-areas: 'value label' 'value note';
-  align-items: center;
-  column-gap: 0.45rem;
-  padding: 0.35rem 0.7rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-card);
-  text-align: left;
-}
-
-.lg-stat-value { grid-area: value; font-size: var(--fs-lg); font-weight: 700; color: var(--text-primary); line-height: 1; }
-.lg-stat-label {
-  grid-area: label; font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.05em;
-  text-transform: uppercase; color: var(--text-secondary); line-height: 1.2;
-}
-.lg-stat-note { grid-area: note; font-size: var(--fs-xs); color: var(--text-muted); line-height: 1.2; }
-
-.lg-stat.is-action { cursor: pointer; transition: border-color var(--transition); }
-.lg-stat.is-action:hover { border-color: var(--warning); }
-.lg-stat.is-action .lg-stat-value { color: var(--warning); }
 
 .lg-body { padding-top: 1rem; }
 .lg-body .table-toolbar { padding-top: 0.75rem; padding-bottom: 0.75rem; }
@@ -2879,7 +2935,6 @@ input, select, textarea {
 
 @media (max-width: 900px) {
   .lg-header-right { align-items: stretch; width: 100%; }
-  .lg-stats { justify-content: flex-start; }
   .lg-header-actions { justify-content: flex-start; }
 }
 
@@ -2988,7 +3043,6 @@ input, select, textarea {
    record — the only new furniture is the meal band that splits a day, and the
    basket printed under each order.
    ---------------------------------------------------------------- */
-.fd-range { width: auto; min-width: 9rem; }
 
 /* The meal, named on the row rather than heading a section of it. A day of
    four meals was four headers grouping four single rows — furniture as tall as
@@ -3189,7 +3243,7 @@ input, select, textarea {
   margin-left: 0.15rem;
   padding: 0 0.3rem;
   border-radius: var(--radius-full);
-  background: rgba(148, 163, 184, 0.16);
+  background: var(--border-hover);
   font-variant-numeric: tabular-nums;
 }
 .fd-gap-toggle.is-on .fd-gap-count { background: var(--accent-glow); }
@@ -3274,15 +3328,19 @@ input, select, textarea {
    then the working area — and only the list scrolls, inside its panel. Food
    splits the area with a chart; Life gives it all to the timeline. Below the
    desktop breakpoint everything stacks and the page scrolls normally, because
-   a viewport lock needs the width. */
+   a viewport lock needs the width.
+
+   .vp-page is the page body, .vp-panel the card that owns the list, and
+   .vp-scroll the one thing inside it that scrolls. Both screens use the same
+   three classes; Food adds .fd-page / .fd-layout for its chart split. */
 @media (min-width: 981px) {
-  .main-content:has(.fd-page, .lg-page) { height: 100vh; min-height: 0; overflow: hidden; }
+  .main-content:has(.vp-page) { height: 100vh; min-height: 0; overflow: hidden; }
 
   /* The router renders each view into an anonymous div inside main-content.
      For every other page it can stay a plain block; here it has to carry the
      height constraint down, or the chain breaks at the one element no view
      owns and the page quietly scrolls again. */
-  .main-content > div:has(.fd-page, .lg-page) {
+  .main-content > div:has(.vp-page) {
     display: flex;
     flex-direction: column;
     flex: 1;
@@ -3290,7 +3348,7 @@ input, select, textarea {
     overflow: hidden;
   }
 
-  .lg-page {
+  .vp-page {
     display: flex;
     flex-direction: column;
     gap: var(--sp-4);
@@ -3299,18 +3357,8 @@ input, select, textarea {
     overflow: hidden;
     padding-bottom: var(--sp-5);
   }
-  .lg-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; margin: 0; }
-  .lg-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-
-  .fd-page {
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-4);
-    flex: 1;
-    min-height: 0;
-    overflow: hidden;
-    padding-bottom: var(--sp-5);
-  }
+  .vp-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; margin: 0; }
+  .vp-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 
   .fd-layout {
     flex: 1;
@@ -3326,9 +3374,6 @@ input, select, textarea {
 
   .fd-chart-card { display: flex; flex-direction: column; min-height: 0; }
   .fd-chart-card .chart-canvas-wrap { flex: 1; min-height: 0; height: auto; }
-
-  .fd-panel { display: flex; flex-direction: column; min-height: 0; margin: 0; }
-  .fd-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 }
 
 @media (max-width: 980px) {
@@ -3551,7 +3596,6 @@ input, select, textarea {
 .dd-row:hover .dd-col-name { background: var(--bg-hover); }
 .dd-row.is-editing td,
 .dd-row.is-editing .dd-col-name { background: var(--accent-dim); }
-.dd-name { font-size: var(--fs-base); font-weight: 600; color: var(--text-primary); }
 .dd-meta { font-size: var(--fs-xs); }
 .dd-kcal { font-weight: 700; color: var(--text-primary); }
 .dd-badge-verified {
@@ -3697,7 +3741,6 @@ input, select, textarea {
 /* An alert has nothing to be matched against: two columns. */
 .pt-rc-row[data-event] { grid-template-columns: minmax(10rem, 1fr) auto; }
 .pt-rc-row--quiet { grid-template-columns: 1fr; padding-block: var(--sp-2); }
-.pt-rc-title { font-size: var(--fs-base); font-weight: 600; color: var(--text-primary); }
 .pt-rc-amount { margin-left: var(--sp-2); font-variant-numeric: tabular-nums; color: var(--text-secondary); }
 .pt-rc-arrow { color: var(--text-muted); font-size: var(--fs-xs); }
 .pt-rc-select { width: 100%; min-width: 0; }
@@ -3750,7 +3793,6 @@ input, select, textarea {
 }
 .hl-row:last-child { border-bottom: 0; }
 .hl-row-main { min-width: 0; }
-.hl-row-title { font-size: var(--fs-base); font-weight: 600; color: var(--text-primary); }
 .hl-row-sub { font-size: var(--fs-xs); color: var(--text-muted); }
 .hl-row-stats {
   display: flex;

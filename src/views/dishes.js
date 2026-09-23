@@ -20,7 +20,7 @@
 import * as api from '../ledger/api.js';
 import { SOURCE_LABEL } from '../ledger/nutrition.js';
 import { normalizeName } from '../ledger/normalize.js';
-import { escapeHTML, showToast } from '../utils.js';
+import { escapeHTML, showToast, emptyState } from '../utils.js';
 
 let rows = [];               // the dictionary, every row
 let usage = new Map();       // normalized_name -> { count, last }
@@ -30,6 +30,8 @@ let sort = 'eaten';          // eaten | name | kcal | updated
 let editingId = null;        // row id in edit mode, or 'new'
 let mergingId = null;        // row id showing the merge panel
 let resetArmed = null;       // row id whose Reset needs a second click
+// A load that resolves after the user has left must not paint a dead DOM.
+let loadToken = 0;
 
 const NUM_FIELDS = ['kcal', 'protein_g', 'carbs_g', 'fat_g', 'portion_g'];
 const LIMITS = { kcal: [0, 20000], protein_g: [0, 500], carbs_g: [0, 2000], fat_g: [0, 500], portion_g: [0.1, 20000] };
@@ -116,28 +118,33 @@ export async function renderDishes(container) {
   await load();
 }
 
+export { renderDishes as render };
+
+export function unmount() {
+  loadToken++;
+}
+
 // ── Data ─────────────────────────────────────────────
 
 async function load() {
+  const token = ++loadToken;
   try {
     const [dict, result] = await Promise.all([
       api.foodDictionaryAll(),
       api.searchEvents({ types: ['food'], limit: 1000 }).catch(() => ({ events: [] })),
     ]);
+    if (token !== loadToken || !document.getElementById('dd-rows')) return;
     rows = dict;
     usage = countUsage(result?.events || []);
     paint();
   } catch (err) {
+    if (token !== loadToken) return;
     const tbody = document.getElementById('dd-rows');
     if (tbody) {
-      tbody.innerHTML = `
-        <tr><td colspan="9">
-          <div class="empty-state">
-            <i class="fas fa-triangle-exclamation" aria-hidden="true"></i>
-            <p>Could not load the dictionary.</p>
-            <p class="text-muted">${escapeHTML(err.message)}</p>
-          </div>
-        </td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="9">${emptyState({
+        icon: 'fa-triangle-exclamation', tone: 'warning',
+        title: 'Could not load the dictionary.', hint: err.message,
+      })}</td></tr>`;
     }
   }
 }
@@ -199,10 +206,11 @@ function paint() {
   const html = [];
   if (editingId === 'new') html.push(editRow({ id: 'new', display_name: '' }, true));
   if (!list.length && editingId !== 'new') {
-    html.push(`<tr><td colspan="9"><div class="empty-state">
-      <i class="fas fa-book-open" aria-hidden="true"></i>
-      <p>${rows.length ? 'Nothing matches.' : 'No dishes yet — run <code>npm run ledger:nutrition</code> or log a meal.'}</p>
-    </div></td></tr>`);
+    html.push(`<tr><td colspan="9">${emptyState({
+      icon: 'fa-book-open',
+      title: rows.length ? 'Nothing matches.' : 'No dishes yet',
+      detail: rows.length ? '' : 'Run <code>npm run ledger:nutrition</code> or log a meal.',
+    })}</td></tr>`);
   }
   for (const r of list) {
     if (r.id === editingId) html.push(editRow(r, false));

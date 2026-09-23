@@ -1,29 +1,16 @@
-import { Chart, Grid, gridHtml } from '../vendor.js';
-import { supabase, getCurrentUserId } from '../supabase.js';
+import { Chart, gridHtml } from '../vendor.js';
+import { getCurrentUserId } from '../supabase.js';
+import * as api from '../points/api.js';
 import { EUR_INR_FALLBACK, MULTIPLIER_OPTIONS, REDEMPTION_PARTNERS } from '../constants.js';
 import * as settings from '../settings.js';
 import {
   formatINR, formatINRFull, formatPercent, formatDate, todayISO,
-  destroyChart, makeCopyable, downloadCSV, escapeHTML, cssVar,
+  destroyChart, downloadCSV, escapeHTML, cssVar,
   openModal, closeModal, showToast, parseNum, fetchEURtoINR, CHART_COLORS, renderKpiCards,
-  numCell, rowActions, callAttrs, comboboxHTML, wireCombobox,
+  numCell, rowActions, callAttrs, comboboxHTML, wireCombobox, buildGrid, withBusy,
 } from '../utils.js';
-
-// Grid.js applies these to both the header cell and every body cell in the
-// column, which is how a numeric column stays right-aligned end to end.
-// A data attribute, not a class: Grid.js writes `class` straight onto the
-// cell, replacing the gridjs-th / gridjs-td classes it needs to stay styled.
-const NUMERIC_COL = () => ({ 'data-align': 'end' });
-const ACTIONS_COL = () => ({ 'data-align': 'end' });
-
-/**
- * Points on a transaction. Every field goes through parseNum — a single null
- * amount or multiplier used to turn the entire KPI row into NaN.
- */
-function calcPoints(t) {
-  if (t.points !== null && t.points !== undefined) return parseNum(t.points);
-  return parseNum(t.amount) * parseNum(t.multiplier) / 100;
-}
+import { wireChartToggle, withAlpha, monthAxis, GRID_LINE } from '../charts.js';
+import { calcPoints, pointsSummary } from '../points-math.js';
 
 let transactions = [];
 let redemptions = [];
@@ -58,6 +45,8 @@ let searchTerm = '';
 let filterMultiplier = '';
 let filterPartner = '';
 let filterMerchant = '';
+// A load that resolves after the user has left must not paint a dead DOM.
+let loadToken = 0;
 
 function getMultiplierBadgeClass(multiplier) {
   const val = parseFloat(multiplier);
@@ -85,9 +74,9 @@ export async function renderPoints(container) {
         <h2>Points & Rewards</h2>
         <p>HSBC TravelOne — spend tracking, points accrual & redemption management</p>
       </div>
-      <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+      <div class="page-actions">
         <span id="fx-rate-badge" class="badge badge-blue">
-          <i class="fas fa-circle-notch fa-spin" style="font-size:0.6rem"></i>
+          <i class="fas fa-circle-notch fa-spin" aria-hidden="true"></i>
           Loading FX…
         </span>
         <button type="button" class="btn-sm btn-ghost" id="pt-export-btn">
@@ -143,19 +132,19 @@ export async function renderPoints(container) {
         <div class="table-toolbar">
           <div class="table-tabs">
             <button type="button" class="table-tab active" id="tab-transactions">
-              <i class="fas fa-receipt" style="margin-right:0.3rem"></i>Transactions
+              <i class="fas fa-receipt" aria-hidden="true"></i>Transactions
             </button>
             <button type="button" class="table-tab" id="tab-redemptions">
-              <i class="fas fa-plane-departure" style="margin-right:0.3rem"></i>Redemptions
+              <i class="fas fa-plane-departure" aria-hidden="true"></i>Redemptions
             </button>
             <button type="button" class="table-tab" id="tab-rules">
-              <i class="fas fa-tags" style="margin-right:0.3rem"></i>Rules
+              <i class="fas fa-tags" aria-hidden="true"></i>Rules
             </button>
             <button type="button" class="table-tab" id="tab-reconcile">
-              <i class="fas fa-code-compare" style="margin-right:0.3rem"></i>Reconcile
+              <i class="fas fa-code-compare" aria-hidden="true"></i>Reconcile
             </button>
           </div>
-          <div class="table-actions" style="display:flex;gap:0.5rem;align-items:center">
+          <div class="table-actions">
             <div id="pt-dynamic-filter-container"></div>
             <div class="search-input-wrap">
               <i class="fas fa-search"></i>
@@ -168,9 +157,9 @@ export async function renderPoints(container) {
         </div>
         <div class="table-inner">
           <div id="pt-transactions-table"></div>
-          <div id="pt-redemptions-table" style="display:none"></div>
-          <div id="pt-rules-table" style="display:none"></div>
-          <div id="pt-reconcile-table" style="display:none"></div>
+          <div id="pt-redemptions-table" hidden></div>
+          <div id="pt-rules-table" hidden></div>
+          <div id="pt-reconcile-table" hidden></div>
         </div>
       </div>
     </div>
@@ -181,18 +170,9 @@ export async function renderPoints(container) {
     </button>
   `;
 
-  // Chart toggles
-  document.getElementById('pt-line-btn').addEventListener('click', () => {
-    activeChartType = 'line';
-    document.getElementById('pt-line-btn').classList.add('active');
-    document.getElementById('pt-bar-btn').classList.remove('active');
-    buildAccumulationChart(transactions, 'line');
-  });
-  document.getElementById('pt-bar-btn').addEventListener('click', () => {
-    activeChartType = 'bar';
-    document.getElementById('pt-bar-btn').classList.add('active');
-    document.getElementById('pt-line-btn').classList.remove('active');
-    buildAccumulationChart(transactions, 'bar');
+  wireChartToggle('pt-line-btn', 'pt-bar-btn', type => {
+    activeChartType = type;
+    buildAccumulationChart(transactions, type);
   });
 
   // Tab switching
@@ -221,6 +201,19 @@ export async function renderPoints(container) {
   await loadData();
 }
 
+export { renderPoints as render };
+
+/** Release the grids and charts before the router replaces the DOM. */
+export function unmount() {
+  loadToken++;
+  pointsChartRef = destroyChart(pointsChartRef);
+  merchantChartRef = destroyChart(merchantChartRef);
+  for (const grid of [txTableGrid, rdTableGrid, rulesGrid]) {
+    if (grid) { try { grid.destroy(); } catch (_) {} }
+  }
+  txTableGrid = rdTableGrid = rulesGrid = null;
+}
+
 /** Where the page is scrolled to, so a redraw can put it back. */
 function scrollState() {
   const main = document.getElementById('main-content');
@@ -233,37 +226,40 @@ function restoreScroll(state) {
 }
 
 async function loadData() {
+  const token = ++loadToken;
   const place = scrollState();
   // Pick up any spend on the card the ledger has seen since the last visit.
   // Idempotent and cheap; a failure here must not stop the page loading.
-  await supabase.rpc('cc_sync_from_events').then(() => {}, () => {});
+  await api.syncFromEvents().catch(() => {});
 
   // cc_points is cc_transactions as it should be read: for a row linked to a
   // ledger event, the date and amount are the bank's, not a typed copy.
-  const [txRes, rdRes, rate, rulesRes, reconRes] = await Promise.all([
-    supabase.from('cc_points').select('*').order('date', { ascending: false }),
-    supabase.from('cc_redemptions').select('*').order('date', { ascending: false }),
-    fetchEURtoINR(EUR_INR_FALLBACK),
-    supabase.from('cc_merchant_rules').select('*').order('uses', { ascending: false }),
-    supabase.rpc('cc_reconcile'),
-  ]);
-
-  const failure = txRes.error || rdRes.error;
-  if (failure) {
-    showToast('Failed to load data: ' + failure.message, 'error');
+  // Rules and the reconcile lists are optional — the page stands without them.
+  let tx, rd, rate, ruleRows, recon;
+  try {
+    [tx, rd, rate, ruleRows, recon] = await Promise.all([
+      api.listTransactions(),
+      api.listRedemptions(),
+      fetchEURtoINR(EUR_INR_FALLBACK),
+      api.listRules().catch(() => []),
+      api.reconcile().catch(() => ({})),
+    ]);
+  } catch (err) {
+    if (token === loadToken) showToast('Failed to load data: ' + err.message, 'error');
     return;
   }
+  if (token !== loadToken || !document.getElementById('pt-kpi-grid')) return;
 
-  transactions = txRes.data || [];
-  redemptions  = rdRes.data || [];
+  transactions = tx || [];
+  redemptions  = rd || [];
   eurRate = rate;
-  rules = rulesRes.data || [];
-  reconcile = { to_match: [], no_alert_found: [], events_without_row: [], settled: {}, ...(reconRes.data || {}) };
+  rules = ruleRows || [];
+  reconcile = { to_match: [], no_alert_found: [], events_without_row: [], settled: {}, ...(recon || {}) };
   pointsDirty = false;
 
   // Update FX badge
   const badge = document.getElementById('fx-rate-badge');
-  if (badge) badge.innerHTML = `<i class="fas fa-euro-sign" style="font-size:0.6rem"></i> 1 EUR = ₹${rate.toFixed(2)}`;
+  if (badge) badge.innerHTML = `<i class="fas fa-euro-sign" aria-hidden="true"></i> 1 EUR = ₹${rate.toFixed(2)}`;
 
   renderKPIs();
   buildAccumulationChart(transactions, activeChartType);
@@ -314,28 +310,16 @@ function renderKPIs() {
   const CC_MILESTONE_TARGET   = settings.get('cc_milestone_target');
   const CC_REWARD_TARGET_RATE = settings.get('cc_reward_target_rate');
 
-  const totalAccrued  = transactions.reduce((s, t) => s + calcPoints(t), 0);
-  const totalRedeemed = redemptions.reduce((s, r) => s + parseNum(r.points_redeemed), 0);
-  const balance = totalAccrued - totalRedeemed;
-  const balanceEUR = POINTS_PER_EUR > 0 ? balance / POINTS_PER_EUR : 0;
-  const balanceINR = balanceEUR * eurRate;
-
-  const totalSpent = transactions.reduce((s, t) => s + parseNum(t.amount), 0);
-  const totalRdValue = redemptions.reduce((s, r) => s + parseNum(r.value_amount), 0);
-  const rewardRate = totalSpent > 0 ? ((totalRdValue + balanceINR) / totalSpent) * 100 : 0;
-  const avgVPP = totalRedeemed > 0 ? totalRdValue / totalRedeemed : 0;
+  const {
+    totalAccrued, totalRedeemed, balance, balanceEUR, balanceINR,
+    totalSpent, totalRdValue, rewardRate, avgVPP,
+  } = pointsSummary(transactions, redemptions, { pointsPerEur: POINTS_PER_EUR, eurRate });
 
   // Month accrual
   const thisMonth = todayISO().slice(0, 7);  // local month, not UTC
   const monthPts = transactions
     .filter(t => t.date?.slice(0,7) === thisMonth)
     .reduce((s, t) => s + calcPoints(t), 0);
-
-  // Top merchant
-  const merchantSpend = {};
-  transactions.forEach(t => {
-    merchantSpend[t.merchant] = (merchantSpend[t.merchant] || 0) + parseNum(t.amount);
-  });
 
   const milestone = CC_MILESTONE_TARGET;
   const progressPct = milestone > 0 ? (totalSpent / milestone) * 100 : 0;
@@ -409,7 +393,7 @@ function buildAccumulationChart(txns, type) {
       datasets: [{
         label: 'Points earned',
         data,
-        backgroundColor: type === 'bar' ? 'rgba(167,139,250,0.5)' : 'rgba(167,139,250,0.15)',
+        backgroundColor: withAlpha(CHART_COLORS.purple, type === 'bar' ? 0.5 : 0.15),
         borderColor: CHART_COLORS.purple,
         borderWidth: 2,
         borderRadius: type === 'bar' ? 6 : 0,
@@ -426,9 +410,9 @@ function buildAccumulationChart(txns, type) {
         tooltip: { callbacks: { label: ctx => ` ${Math.round(ctx.parsed.y).toLocaleString('en-IN')} pts` } }
       },
       scales: {
-        x: { type: 'time', time: { unit: 'month', displayFormats: { month: 'MMM yy' } }, grid: { display: false }, ticks: { maxRotation: 0 } },
+        x: monthAxis(),
         y: {
-          grid: { color: 'rgba(148,163,184,0.06)' },
+          grid: { color: GRID_LINE },
           ticks: { callback: v => Math.round(v).toLocaleString('en-IN') }
         }
       }
@@ -485,11 +469,11 @@ function renderTableFilters() {
     const merchants = [...new Set(transactions.map(t => t.merchant))].filter(Boolean).sort();
     
     container.innerHTML = `
-      <select id="pt-multiplier-filter" class="form-input" style="padding:0.35rem 0.5rem;font-size:0.8rem;height:36px;width:130px;border-radius:var(--radius-sm)" aria-label="Filter by multiplier">
+      <select id="pt-multiplier-filter" class="form-select toolbar-select" aria-label="Filter by multiplier">
         <option value="">All Multipliers</option>
         ${multipliers.map(m => `<option value="${escapeHTML(m)}" ${filterMultiplier === String(m) ? 'selected' : ''}>${escapeHTML(m)}×</option>`).join('')}
       </select>
-      <select id="pt-merchant-filter" class="form-input" style="padding:0.35rem 0.5rem;font-size:0.8rem;height:36px;width:140px;border-radius:var(--radius-sm);max-width:180px" aria-label="Filter by merchant">
+      <select id="pt-merchant-filter" class="form-select toolbar-select" aria-label="Filter by merchant">
         <option value="">All Merchants</option>
         ${merchants.map(mer => `<option value="${escapeHTML(mer)}" ${filterMerchant === mer ? 'selected' : ''}>${escapeHTML(mer)}</option>`).join('')}
       </select>
@@ -509,7 +493,7 @@ function renderTableFilters() {
   } else {
     const partners = [...new Set(redemptions.map(r => r.partner))].filter(Boolean).sort();
     container.innerHTML = `
-      <select id="pt-partner-filter" class="form-input" style="padding:0.35rem 0.5rem;font-size:0.8rem;height:36px;width:140px;border-radius:var(--radius-sm)" aria-label="Filter by transfer partner">
+      <select id="pt-partner-filter" class="form-select toolbar-select" aria-label="Filter by transfer partner">
         <option value="">All Partners</option>
         ${partners.map(p => `<option value="${escapeHTML(p)}" ${filterPartner === p ? 'selected' : ''}>${escapeHTML(p)}</option>`).join('')}
       </select>
@@ -527,19 +511,22 @@ function switchTab(tab) {
   activeTab = tab;
   for (const name of ['transactions', 'redemptions', 'rules', 'reconcile']) {
     document.getElementById(`tab-${name}`).classList.toggle('active', tab === name);
-    document.getElementById(`pt-${name}-table`).style.display = tab === name ? '' : 'none';
+    document.getElementById(`pt-${name}-table`).hidden = tab !== name;
+  }
+  // Rules and Reconcile have nothing to export; say so on the button rather
+  // than silently handing over a different tab's rows.
+  const exportBtn = document.getElementById('pt-export-btn');
+  if (exportBtn) {
+    const exportable = tab === 'transactions' || tab === 'redemptions';
+    exportBtn.disabled = !exportable;
+    exportBtn.title = exportable ? `Export the ${tab} shown, with the current filters` : 'Nothing to export on this tab';
   }
   renderTableFilters();
   if (leavingReconcile && pointsDirty) loadData();
 }
 
-function renderTxTable() {
-  const container = document.getElementById('pt-transactions-table');
-  if (!container) return;
-  // Redrawing must not send you back to page one.
-  const currentPage = Math.max(0, (parseInt(container.querySelector('.gridjs-pages .gridjs-currentPage')?.textContent, 10) || 1) - 1);
-  if (txTableGrid) { try { txTableGrid.destroy(); } catch(_) {} }
-
+/** The transactions the table shows, under every active filter. */
+function filteredTransactions() {
   let filtered = transactions;
   if (filterBasis) {
     filtered = filtered.filter(t => t.basis === filterBasis);
@@ -557,8 +544,32 @@ function renderTxTable() {
       t.date?.includes(searchTerm)
     );
   }
+  return filtered;
+}
 
-  const rows = filtered.map(t => {
+/** The redemptions the table shows, under every active filter. */
+function filteredRedemptions() {
+  let filtered = redemptions;
+  if (filterPartner) {
+    filtered = filtered.filter(r => r.partner === filterPartner);
+  }
+  if (searchTerm) {
+    filtered = filtered.filter(r =>
+      r.partner?.toLowerCase().includes(searchTerm) ||
+      r.description?.toLowerCase().includes(searchTerm) ||
+      r.date?.includes(searchTerm)
+    );
+  }
+  return filtered;
+}
+
+function renderTxTable() {
+  const container = document.getElementById('pt-transactions-table');
+  if (!container) return;
+  // Redrawing must not send you back to page one.
+  const currentPage = Math.max(0, (parseInt(container.querySelector('.gridjs-pages .gridjs-currentPage')?.textContent, 10) || 1) - 1);
+
+  const rows = filteredTransactions().map(t => {
     const pts = calcPoints(t);
     return [
       formatDate(t.date),
@@ -573,29 +584,27 @@ function renderTxTable() {
     ];
   });
 
-  txTableGrid = new Grid({
-    columns: [
-      { name: 'Date' },
-      { name: 'Merchant' },
-      { name: 'Description' },
-      { name: 'Amount', attributes: NUMERIC_COL },
-      { name: 'Multiplier' },
-      { name: 'Points', attributes: NUMERIC_COL },
-      { name: 'Actions', sort: false, attributes: ACTIONS_COL },
-    ],
-    data: rows,
-    pagination: { limit: 10, page: Math.min(currentPage, Math.max(0, Math.ceil(rows.length / 10) - 1)) },
-    sort: true,
-    language: { noRecordsFound: 'No transactions yet. Add one with the + button!' },
-  }).render(container);
+  txTableGrid = buildGrid(container, txTableGrid, [
+    { name: 'Date' },
+    { name: 'Merchant' },
+    { name: 'Description' },
+    { name: 'Amount', numeric: true },
+    { name: 'Multiplier' },
+    { name: 'Points', numeric: true },
+    { name: 'Actions', actions: true },
+  ], rows, { limit: 10, page: currentPage, empty: 'No transactions yet. Add one with the + button!' });
 
   window.__ptTxEdit = (id) => {
     const t = transactions.find(t => t.id === id);
     if (t) openForm(t, 'transaction');
   };
   window.__ptTxConfirm = async (id) => {
-    const { error } = await supabase.rpc('cc_confirm', { p_id: id });
-    if (error) { showToast('Could not confirm: ' + error.message, 'error'); return; }
+    try {
+      await api.confirmTransaction(id);
+    } catch (err) {
+      showToast('Could not confirm: ' + err.message, 'error');
+      return;
+    }
     // Nothing about the numbers changed, so nothing else needs redrawing.
     const row = transactions.find(t => t.id === id);
     if (row) row.basis = 'confirmed';
@@ -607,8 +616,12 @@ function renderTxTable() {
   };
   window.__ptTxDelete = async (id) => {
     if (!confirm('Delete this transaction?')) return;
-    const { error } = await supabase.from('cc_transactions').delete().eq('id', id);
-    if (error) { showToast('Delete failed: ' + error.message, 'error'); return; }
+    try {
+      await api.deleteTransaction(id);
+    } catch (err) {
+      showToast('Delete failed: ' + err.message, 'error');
+      return;
+    }
     showToast('Transaction deleted.');
     await loadData();
   };
@@ -640,22 +653,19 @@ function amountCell(t) {
 function renderRulesTable() {
   const container = document.getElementById('pt-rules-table');
   if (!container) return;
-  if (rulesGrid) { try { rulesGrid.destroy(); } catch (_) {} }
 
   const shown = searchTerm
     ? rules.filter(r => r.ledger_merchant?.toLowerCase().includes(searchTerm) || r.label?.toLowerCase().includes(searchTerm))
     : rules;
 
-  rulesGrid = new Grid({
-    columns: [
-      { name: 'On the card alert' },
-      { name: 'Your label' },
-      { name: 'Multiplier' },
-      { name: 'Seen', attributes: NUMERIC_COL },
-      { name: 'Rule' },
-      { name: 'Actions', sort: false, attributes: ACTIONS_COL },
-    ],
-    data: shown.map(r => [
+  rulesGrid = buildGrid(container, rulesGrid, [
+    { name: 'On the card alert' },
+    { name: 'Your label' },
+    { name: 'Multiplier' },
+    { name: 'Seen', numeric: true },
+    { name: 'Rule' },
+    { name: 'Actions', actions: true },
+  ], shown.map(r => [
       r.ledger_merchant,
       gridHtml(`${escapeHTML(r.label)}${r.is_work ? ' <span class="badge badge-blue">Work</span>' : ''}`),
       gridHtml(`<span class="badge ${getMultiplierBadgeClass(r.multiplier)}">${escapeHTML(r.multiplier)}×</span>`),
@@ -666,11 +676,7 @@ function renderRulesTable() {
           ? '<span class="badge badge-yellow" title="You have filed this merchant under more than one label. The rule uses the most common one.">Learned · mixed</span>'
           : '<span class="badge">Learned</span>'),
       gridHtml(rowActions(`window.__ptRuleEdit('${encodeURIComponent(r.merchant_key)}')`, `window.__ptRuleDelete('${encodeURIComponent(r.merchant_key)}')`, 'rule')),
-    ]),
-    pagination: { limit: 12 },
-    sort: true,
-    language: { noRecordsFound: 'No rules yet. They are learned from rows linked to a card alert.' },
-  }).render(container);
+    ]), { limit: 12, empty: 'No rules yet. They are learned from rows linked to a card alert.' });
 
   window.__ptRuleEdit = (key) => {
     const rule = rules.find(r => r.merchant_key === decodeURIComponent(key));
@@ -678,20 +684,21 @@ function renderRulesTable() {
   };
   window.__ptRuleDelete = async (key) => {
     if (!confirm('Delete this rule? New spends at this merchant will arrive under the bank\'s own name at 2×.')) return;
-    const { error } = await supabase.from('cc_merchant_rules').delete().eq('merchant_key', decodeURIComponent(key));
-    if (error) { showToast('Delete failed: ' + error.message, 'error'); return; }
+    try {
+      await api.deleteRule(decodeURIComponent(key));
+    } catch (err) {
+      showToast('Delete failed: ' + err.message, 'error');
+      return;
+    }
     showToast('Rule deleted.');
     await loadData();
   };
 }
 
 function openRuleForm(rule) {
-  openModal(`
-    <div class="modal-header">
-      <h3 class="modal-title">Rule for ${escapeHTML(rule.ledger_merchant)}</h3>
-      <button class="modal-close" id="pt-modal-close" aria-label="Close"><i class="fas fa-xmark"></i></button>
-    </div>
-    <div id="pt-form-body">
+  openModal({
+    title: `Rule for ${rule.ledger_merchant}`,
+    body: `
       <div class="form-group">
         <label class="form-label" for="pt-r-label">File it under</label>
         ${comboboxHTML({ id: 'pt-r-label', value: rule.label, placeholder: 'Search or type a new one', options: usedBefore(t => t.merchant) })}
@@ -705,37 +712,43 @@ function openRuleForm(rule) {
       <label class="pt-check"><input type="checkbox" id="pt-r-work" ${rule.is_work ? 'checked' : ''} />
         <span>Spends here are work <span class="pt-check-hint">tick only if nearly all of them are; you can always tick one row</span></span></label>
       <label class="pt-check"><input type="checkbox" id="pt-r-apply" checked />
-        <span>Also apply to rows at this merchant that are still assumed</span></label>
-    </div>
-    <div class="modal-footer">
-      <button class="btn-cancel" id="pt-form-cancel">Cancel</button>
-      <button class="btn-submit" id="pt-rule-submit">Save rule</button>
-    </div>
-  `);
+        <span>Also apply to rows at this merchant that are still assumed</span></label>`,
+    footer: `
+      <button type="button" class="btn-cancel" data-close>Cancel</button>
+      <button type="button" class="btn-submit" id="pt-rule-submit">Save rule</button>`,
+  });
   wireCombobox('pt-r-label');
-  document.getElementById('pt-modal-close').addEventListener('click', closeModal);
-  document.getElementById('pt-form-cancel').addEventListener('click', closeModal);
   document.getElementById('pt-rule-submit').addEventListener('click', async () => {
     const label = document.getElementById('pt-r-label').value.trim();
     const multiplier = parseNum(document.getElementById('pt-r-multiplier').value);
     const isWork = Boolean(document.getElementById('pt-r-work').checked);
     if (!label) { showToast('A rule needs a label.', 'error'); return; }
 
-    const { error } = await supabase.from('cc_merchant_rules')
-      .update({ label, multiplier, is_work: isWork, source: 'manual', ambiguous: false, updated_at: new Date().toISOString() })
-      .eq('merchant_key', rule.merchant_key);
-    if (error) { showToast('Save failed: ' + error.message, 'error'); return; }
+    await withBusy(document.getElementById('pt-rule-submit'), 'Saving…', async () => {
+      try {
+        await api.updateRule(rule.merchant_key, {
+          label, multiplier, is_work: isWork, source: 'manual', ambiguous: false, updated_at: new Date().toISOString(),
+        });
 
-    if (document.getElementById('pt-r-apply').checked) {
-      const waiting = transactions.filter(t => t.basis === 'assumed' && t.raw_merchant
-        && t.raw_merchant.toLowerCase() === rule.ledger_merchant.toLowerCase());
-      for (const t of waiting) {
-        await supabase.from('cc_transactions').update({ merchant: label, multiplier, is_work: isWork }).eq('id', t.id);
+        if (document.getElementById('pt-r-apply').checked) {
+          const waiting = transactions
+            .filter(t => t.basis === 'assumed' && t.raw_merchant
+              && t.raw_merchant.toLowerCase() === rule.ledger_merchant.toLowerCase())
+            .map(t => t.id);
+          // One update for every waiting row. Applying a rule you wrote is a
+          // look at those rows, so they are confirmed — "any edit confirms".
+          if (waiting.length) {
+            await api.updateTransactions(waiting, { merchant: label, multiplier, is_work: isWork, basis: 'confirmed' });
+          }
+        }
+      } catch (err) {
+        showToast('Save failed: ' + err.message, 'error');
+        return;
       }
-    }
-    closeModal();
-    showToast('Rule saved.');
-    await loadData();
+      closeModal();
+      showToast('Rule saved.');
+      await loadData();
+    });
   });
 }
 
@@ -847,8 +860,11 @@ function renderReconcile() {
     const eventId = el?.querySelector('.pt-rc-select')?.value;
     if (!eventId) return;
     busy(el, true);
-    const { error } = await supabase.rpc('cc_link', { p_id: id, p_event_id: eventId });
-    if (error) { busy(el, false); showToast('Could not link: ' + error.message, 'error'); return; }
+    try {
+      await api.linkToEvent(id, eventId);
+    } catch (err) {
+      busy(el, false); showToast('Could not link: ' + err.message, 'error'); return;
+    }
     removeRow(`[data-row="${CSS.escape(id)}"]`, 'pt-rc-n-match', 'to_match', r => r.id === id);
     removeRow(`[data-event="${CSS.escape(eventId)}"]`, 'pt-rc-n-events', 'events_without_row', e => e.event_id === eventId);
     dropCandidate(eventId);
@@ -857,15 +873,21 @@ function renderReconcile() {
   window.__ptNoMatch = async (id) => {
     const el = container.querySelector(`[data-row="${CSS.escape(id)}"]`);
     busy(el, true);
-    const { error } = await supabase.rpc('cc_mark_no_alert', { p_ids: [id] });
-    if (error) { busy(el, false); showToast('Could not save: ' + error.message, 'error'); return; }
+    try {
+      await api.markNoAlert([id]);
+    } catch (err) {
+      busy(el, false); showToast('Could not save: ' + err.message, 'error'); return;
+    }
     removeRow(`[data-row="${CSS.escape(id)}"]`, 'pt-rc-n-match', 'to_match', r => r.id === id);
   };
   window.__ptCreate = async (eventId) => {
     const el = container.querySelector(`[data-event="${CSS.escape(eventId)}"]`);
     busy(el, true);
-    const { error } = await supabase.rpc('cc_create_from_event', { p_event_id: eventId });
-    if (error) { busy(el, false); showToast('Could not add: ' + error.message, 'error'); return; }
+    try {
+      await api.createFromEvent(eventId);
+    } catch (err) {
+      busy(el, false); showToast('Could not add: ' + err.message, 'error'); return;
+    }
     removeRow(`[data-event="${CSS.escape(eventId)}"]`, 'pt-rc-n-events', 'events_without_row', e => e.event_id === eventId);
     dropCandidate(eventId);
     showToast('Row added as assumed. Confirm it in Transactions.');
@@ -873,8 +895,11 @@ function renderReconcile() {
   window.__ptIgnore = async (eventId) => {
     const el = container.querySelector(`[data-event="${CSS.escape(eventId)}"]`);
     busy(el, true);
-    const { error } = await supabase.rpc('cc_ignore_events', { p_event_ids: [eventId] });
-    if (error) { busy(el, false); showToast('Could not save: ' + error.message, 'error'); return; }
+    try {
+      await api.ignoreEvents([eventId]);
+    } catch (err) {
+      busy(el, false); showToast('Could not save: ' + err.message, 'error'); return;
+    }
     removeRow(`[data-event="${CSS.escape(eventId)}"]`, 'pt-rc-n-events', 'events_without_row', e => e.event_id === eventId);
     dropCandidate(eventId);
   };
@@ -882,8 +907,11 @@ function renderReconcile() {
     const ids = reconcile.no_alert_found.map(r => r.id);
     if (!ids.length) return;
     event.target.disabled = true;
-    const { error } = await supabase.rpc('cc_mark_no_alert', { p_ids: ids });
-    if (error) { event.target.disabled = false; showToast('Could not save: ' + error.message, 'error'); return; }
+    try {
+      await api.markNoAlert(ids);
+    } catch (err) {
+      event.target.disabled = false; showToast('Could not save: ' + err.message, 'error'); return;
+    }
     reconcile.no_alert_found = [];
     container.querySelector('.pt-rc-details')?.setAttribute('hidden', '');
     showToast(`${ids.length} rows marked as fine.`);
@@ -893,21 +921,8 @@ function renderReconcile() {
 function renderRdTable() {
   const container = document.getElementById('pt-redemptions-table');
   if (!container) return;
-  if (rdTableGrid) { try { rdTableGrid.destroy(); } catch(_) {} }
 
-  let filtered = redemptions;
-  if (filterPartner) {
-    filtered = filtered.filter(r => r.partner === filterPartner);
-  }
-  if (searchTerm) {
-    filtered = filtered.filter(r =>
-      r.partner?.toLowerCase().includes(searchTerm) ||
-      r.description?.toLowerCase().includes(searchTerm) ||
-      r.date?.includes(searchTerm)
-    );
-  }
-
-  const rows = filtered.map(r => {
+  const rows = filteredRedemptions().map(r => {
     const ptsRedeemed = parseNum(r.points_redeemed);
     const vpp = ptsRedeemed > 0 ? parseNum(r.value_amount) / ptsRedeemed : 0;
     return [
@@ -921,21 +936,15 @@ function renderRdTable() {
     ];
   });
 
-  rdTableGrid = new Grid({
-    columns: [
-      { name: 'Date' },
-      { name: 'Partner' },
-      { name: 'Description' },
-      { name: 'Points', attributes: NUMERIC_COL },
-      { name: 'Value', attributes: NUMERIC_COL },
-      { name: 'Value per point', attributes: NUMERIC_COL },
-      { name: 'Actions', sort: false, attributes: ACTIONS_COL },
-    ],
-    data: rows,
-    pagination: { limit: 10 },
-    sort: true,
-    language: { noRecordsFound: 'No redemptions yet. Log your first one!' },
-  }).render(container);
+  rdTableGrid = buildGrid(container, rdTableGrid, [
+    { name: 'Date' },
+    { name: 'Partner' },
+    { name: 'Description' },
+    { name: 'Points', numeric: true },
+    { name: 'Value', numeric: true },
+    { name: 'Value per point', numeric: true },
+    { name: 'Actions', actions: true },
+  ], rows, { limit: 10, empty: 'No redemptions yet. Log your first one!' });
 
   window.__ptRdEdit = (id) => {
     const r = redemptions.find(r => r.id === id);
@@ -943,8 +952,12 @@ function renderRdTable() {
   };
   window.__ptRdDelete = async (id) => {
     if (!confirm('Delete this redemption?')) return;
-    const { error } = await supabase.from('cc_redemptions').delete().eq('id', id);
-    if (error) { showToast('Delete failed: ' + error.message, 'error'); return; }
+    try {
+      await api.deleteRedemption(id);
+    } catch (err) {
+      showToast('Delete failed: ' + err.message, 'error');
+      return;
+    }
     showToast('Redemption deleted.');
     await loadData();
   };
@@ -1016,9 +1029,9 @@ function openForm(data, type) {
       <label class="pt-check"><input type="checkbox" id="pt-f-remember" ${data.basis === 'assumed' ? 'checked' : ''} />
         <span>Remember this label, multiplier and work setting for <strong>${escapeHTML(data.raw_merchant)}</strong></span></label>` : ''}
     <!-- Preview -->
-    <div style="background:var(--bg-elevated);border-radius:var(--radius-md);padding:0.85rem 1rem;border:1px solid var(--border);font-size:0.85rem">
-      <span style="color:var(--text-muted)">Auto-calculated points: </span>
-      <span id="pt-preview-pts" style="color:var(--success);font-weight:700">0 pts</span>
+    <div class="form-preview">
+      <span class="form-preview-muted">Auto-calculated points: </span>
+      <span id="pt-preview-pts" class="form-preview-value">0 pts</span>
     </div>
   `;
 
@@ -1060,45 +1073,37 @@ function openForm(data, type) {
       </div>
     </div>
     <!-- VPP Preview -->
-    <div style="background:var(--bg-elevated);border-radius:var(--radius-md);padding:0.85rem 1rem;border:1px solid var(--border);font-size:0.85rem">
-      <span style="color:var(--text-muted)">Value per point: </span>
-      <span id="pt-preview-vpp" style="color:var(--success);font-weight:700">₹0.000</span>
+    <div class="form-preview">
+      <span class="form-preview-muted">Value per point: </span>
+      <span id="pt-preview-vpp" class="form-preview-value">₹0.000</span>
     </div>
   `;
 
-  openModal(`
-    <div class="modal-header">
-      <div class="modal-title">${escapeHTML(title)}</div>
-      <button type="button" class="modal-close" id="pt-modal-close" aria-label="Close"><i class="fas fa-times" aria-hidden="true"></i></button>
-    </div>
-    <div class="modal-tabs">
-      <button type="button" class="modal-tab ${isTransaction ? 'active' : ''}" id="modal-tab-tx" aria-pressed="${isTransaction}">
-        <i class="fas fa-receipt" aria-hidden="true"></i>Transaction
-      </button>
-      <button type="button" class="modal-tab ${!isTransaction ? 'active' : ''}" id="modal-tab-rd" aria-pressed="${!isTransaction}">
-        <i class="fas fa-plane" aria-hidden="true"></i>Redemption
-      </button>
-    </div>
-    <div class="modal-body" id="pt-form-body">
-      ${isTransaction ? transactionForm : redemptionForm}
-    </div>
-    <div class="modal-footer">
-      <button class="btn-cancel" id="pt-form-cancel">Cancel</button>
-      <button class="btn-submit" id="pt-form-submit">${data ? 'Save changes' : `Add ${isTransaction ? 'transaction' : 'redemption'}`}</button>
-    </div>
-  `);
-
-  // Close handlers
-  document.getElementById('pt-modal-close').addEventListener('click', closeModal);
-  document.getElementById('pt-form-cancel').addEventListener('click', closeModal);
+  openModal({
+    title,
+    tabs: `
+      <div class="modal-tabs">
+        <button type="button" class="modal-tab ${isTransaction ? 'active' : ''}" id="modal-tab-tx" aria-pressed="${isTransaction}">
+          <i class="fas fa-receipt" aria-hidden="true"></i>Transaction
+        </button>
+        <button type="button" class="modal-tab ${!isTransaction ? 'active' : ''}" id="modal-tab-rd" aria-pressed="${!isTransaction}">
+          <i class="fas fa-plane" aria-hidden="true"></i>Redemption
+        </button>
+      </div>`,
+    body: isTransaction ? transactionForm : redemptionForm,
+    footer: `
+      <button type="button" class="btn-cancel" data-close>Cancel</button>
+      <button type="button" class="btn-submit" id="pt-form-submit">${data ? 'Save changes' : `Add ${isTransaction ? 'transaction' : 'redemption'}`}</button>`,
+  });
 
   // Tab switching inside modal (only for new entries)
   if (!data) {
+    const body = document.querySelector('#modal-overlay .modal-body');
     document.getElementById('modal-tab-tx').addEventListener('click', () => {
       editingType = 'transaction';
       document.getElementById('modal-tab-tx').classList.add('active');
       document.getElementById('modal-tab-rd').classList.remove('active');
-      document.getElementById('pt-form-body').innerHTML = transactionForm;
+      body.innerHTML = transactionForm;
       document.getElementById('pt-form-submit').textContent = 'Add transaction';
       attachTxPreview();
     });
@@ -1106,7 +1111,7 @@ function openForm(data, type) {
       editingType = 'redemption';
       document.getElementById('modal-tab-rd').classList.add('active');
       document.getElementById('modal-tab-tx').classList.remove('active');
-      document.getElementById('pt-form-body').innerHTML = redemptionForm;
+      body.innerHTML = redemptionForm;
       document.getElementById('pt-form-submit').textContent = 'Add redemption';
       attachRdPreview();
     });
@@ -1174,11 +1179,11 @@ function attachRdPreview() {
 
 async function submitForm() {
   const btn = document.getElementById('pt-form-submit');
-  btn.disabled = true;
-  btn.textContent = 'Saving…';
+  await withBusy(btn, 'Saving…', submitPayload);
+}
 
-  let error;
-
+/** Read the open form, validate it and write it. Runs inside withBusy. */
+async function submitPayload() {
   if (editingType === 'transaction') {
     const ptsOverride = document.getElementById('pt-f-points')?.value;
     const payload = {
@@ -1194,28 +1199,33 @@ async function submitForm() {
 
     if (!payload.date || !payload.merchant) {
       showToast('Please fill in Date and Merchant.', 'error');
-      btn.disabled = false; btn.textContent = 'Add transaction'; return;
+      return;
     }
     if (editingId) payload.id = editingId;
 
     const current = editingId ? transactions.find(t => t.id === editingId) : null;
-    if (current?.event_id) {
-      // Linked to a card alert: the date and amount are the bank's and are not
-      // written, and the note is written through to the event, which is where
-      // it lives. Any save confirms an assumed row — editing it is looking at it.
-      ({ error } = await supabase.rpc('cc_confirm', {
-        p_id: editingId, p_label: payload.merchant, p_multiplier: payload.multiplier,
-        p_points: payload.points, p_remember: Boolean(document.getElementById('pt-f-remember')?.checked),
-        p_description: payload.description ?? '',
-        p_is_work: payload.is_work,
-      }));
-      // cc_confirm keeps an existing points override when given null, so
-      // clearing the override has to be said separately.
-      if (!error && payload.points === null && current.points !== null) {
-        ({ error } = await supabase.from('cc_transactions').update({ points: null }).eq('id', editingId));
+    try {
+      if (current?.event_id) {
+        // Linked to a card alert: the date and amount are the bank's and are not
+        // written, and the note is written through to the event, which is where
+        // it lives. Any save confirms an assumed row — editing it is looking at it.
+        await api.confirmTransaction(editingId, {
+          p_label: payload.merchant, p_multiplier: payload.multiplier,
+          p_points: payload.points, p_remember: Boolean(document.getElementById('pt-f-remember')?.checked),
+          p_description: payload.description ?? '',
+          p_is_work: payload.is_work,
+        });
+        // cc_confirm keeps an existing points override when given null, so
+        // clearing the override has to be said separately.
+        if (payload.points === null && current.points !== null) {
+          await api.updateTransactions([editingId], { points: null });
+        }
+      } else {
+        await api.upsertTransaction(payload);
       }
-    } else {
-      ({ error } = await supabase.from('cc_transactions').upsert([payload]));
+    } catch (err) {
+      showToast('Save failed: ' + err.message, 'error');
+      return;
     }
   } else {
     const payload = {
@@ -1232,18 +1242,16 @@ async function submitForm() {
     // can type into can also be left empty.
     if (!payload.date || !payload.partner || !payload.points_redeemed) {
       showToast('Please fill in Date, Partner and Points Redeemed.', 'error');
-      btn.disabled = false; btn.textContent = 'Add redemption'; return;
+      return;
     }
     if (editingId) payload.id = editingId;
 
-    ({ error } = await supabase.from('cc_redemptions').upsert([payload]));
-  }
-
-  if (error) {
-    showToast('Save failed: ' + error.message, 'error');
-    btn.disabled = false;
-    btn.textContent = editingId ? 'Save changes' : `Add ${editingType}`;
-    return;
+    try {
+      await api.upsertRedemption(payload);
+    } catch (err) {
+      showToast('Save failed: ' + err.message, 'error');
+      return;
+    }
   }
 
   closeModal();
@@ -1252,19 +1260,30 @@ async function submitForm() {
 }
 
 // ── Export ───────────────────────────────────────────────
+// What is on screen, under the filters that are on — not the whole table,
+// and never a different tab's rows.
 function exportCSV() {
   if (activeTab === 'transactions') {
-    const headers = ['Date','Merchant','Description','Amount (₹)','Multiplier','Points'];
-    const rows = transactions.map(t => [t.date, t.merchant, t.description||'', t.amount, t.multiplier+'x', calcPoints(t).toFixed(0)]);
-    downloadCSV(headers, rows, `cc_transactions_${todayISO()}.csv`);
+    const rows = filteredTransactions();
+    if (!rows.length) { showToast('No transactions to export.', 'error'); return; }
+    downloadCSV(
+      ['Date','Merchant','Description','Amount (₹)','Multiplier','Points','Basis','Work'],
+      rows.map(t => [t.date, t.merchant, t.description||'', t.amount, t.multiplier+'x', calcPoints(t).toFixed(0), t.basis || '', t.is_work ? 'yes' : '']),
+      `cc_transactions_${todayISO()}.csv`);
+  } else if (activeTab === 'redemptions') {
+    const rows = filteredRedemptions();
+    if (!rows.length) { showToast('No redemptions to export.', 'error'); return; }
+    downloadCSV(
+      ['Date','Partner','Description','Points Redeemed','Value (₹)','Value/pt (₹)'],
+      rows.map(r => {
+        const ptsRedeemed = parseNum(r.points_redeemed);
+        const vpp = ptsRedeemed > 0 ? (parseNum(r.value_amount) / ptsRedeemed).toFixed(3) : '0';
+        return [r.date, r.partner, r.description||'', r.points_redeemed, r.value_amount, vpp];
+      }),
+      `cc_redemptions_${todayISO()}.csv`);
   } else {
-    const headers = ['Date','Partner','Description','Points Redeemed','Value (₹)','Value/pt (₹)'];
-    const rows = redemptions.map(r => {
-      const ptsRedeemed = parseNum(r.points_redeemed);
-      const vpp = ptsRedeemed > 0 ? (parseNum(r.value_amount) / ptsRedeemed).toFixed(3) : '0';
-      return [r.date, r.partner, r.description||'', r.points_redeemed, r.value_amount, vpp];
-    });
-    downloadCSV(headers, rows, `cc_redemptions_${todayISO()}.csv`);
+    showToast('Nothing to export on this tab.', 'error');
+    return;
   }
   showToast('CSV exported!');
 }

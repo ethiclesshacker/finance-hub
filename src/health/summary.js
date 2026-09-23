@@ -3,11 +3,7 @@
 // `node --test` exactly as they run in the browser.
 // ======================================================
 
-/** Shift a YYYY-MM-DD by whole days, in UTC so DST cannot move it. */
-export function shiftISO(iso, days) {
-  const [y, m, d] = iso.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
-}
+export { shiftISO } from '../ledger/dates.js';
 
 // Own tables rather than toLocaleDateString: ICU versions disagree ("Sep" vs
 // "Sept" for en-GB), and an axis label should not change with the browser.

@@ -19,8 +19,9 @@ import {
   shiftISO, shortDay, longDay, formatHours, summarise, fillHours,
 } from '../health/summary.js';
 import {
-  destroyChart, escapeHTML, cssVar, renderKpiCards, todayISO, CHART_COLORS,
+  destroyChart, escapeHTML, cssVar, renderKpiCards, todayISO, CHART_COLORS, emptyState,
 } from '../utils.js';
+import { destroyCharts } from '../charts.js';
 
 const RANGES = [7, 30, 90];
 const RANGE_KEY = 'finance-hub-health-range';
@@ -122,6 +123,14 @@ export async function renderHealth(container) {
   await load();
 }
 
+export { renderHealth as render };
+
+/** Destroy every chart before the router replaces the DOM. */
+export function unmount() {
+  loadToken++;
+  charts = destroyCharts(charts);
+}
+
 function chartCard(id, title, subtitle, extra = '') {
   return `
     <div class="chart-card">
@@ -171,7 +180,10 @@ async function load() {
       : 'Apple Health, synced from your iPhone';
 
     if (!cat?.types?.length) {
-      alertEl.innerHTML = emptyState();
+      alertEl.innerHTML = emptyState({
+        icon: 'fa-heart-pulse', tone: 'accent', title: 'Nothing synced yet',
+        hint: 'Open HealthSync on your iPhone and run a sync. See docs/health-sync.md for setup.',
+      });
     } else {
       alertEl.innerHTML = '';
     }
@@ -186,23 +198,12 @@ async function load() {
     renderTable();
     await loadHours(state.selectedDay);
   } catch (error) {
-    if (token !== loadToken) return;
-    alertEl.innerHTML = `
-      <div class="empty-state">
-        <i class="fas fa-triangle-exclamation" aria-hidden="true"></i>
-        <h4>Could not load health data</h4>
-        <p>${escapeHTML(error.message)}</p>
-      </div>`;
+    if (token !== loadToken || !alertEl?.isConnected) return;
+    alertEl.innerHTML = emptyState({
+      icon: 'fa-triangle-exclamation', tone: 'warning',
+      title: 'Could not load health data', hint: error.message,
+    });
   }
-}
-
-function emptyState() {
-  return `
-    <div class="empty-state">
-      <i class="fas fa-heart-pulse" aria-hidden="true"></i>
-      <h4>Nothing synced yet</h4>
-      <p>Open HealthSync on your iPhone and run a sync. See docs/health-sync.md for setup.</p>
-    </div>`;
 }
 
 function relativeTime(iso) {

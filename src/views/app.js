@@ -2,15 +2,20 @@ import { supabase } from '../supabase.js';
 import * as settings from '../settings.js';
 import { escapeHTML } from '../utils.js';
 import { navigateTo, registerRoute, startRouter } from '../router.js';
-import { renderDashboard } from './dashboard.js';
-import { renderNetWorth } from './networth.js';
-import { renderPoints } from './points.js';
-import { renderFI } from './fi.js';
-import { renderSettings } from './settings.js';
-import { renderLedger } from './ledger.js';
-import { renderFood } from './food.js';
-import { renderDishes } from './dishes.js';
-import { renderHealth } from './health.js';
+import { NAV_ITEMS } from '../routes.js';
+import * as dashboard from './dashboard.js';
+import * as networth from './networth.js';
+import * as points from './points.js';
+import * as fi from './fi.js';
+import * as settings_ from './settings.js';
+import * as ledger from './ledger.js';
+import * as food from './food.js';
+import * as dishes from './dishes.js';
+import * as health from './health.js';
+
+// Each view module exports `render(container)` and, where it holds charts,
+// grids, timers or document listeners, `unmount()`.
+const VIEWS = { dashboard, networth, points, fi, ledger, food, dishes, health, settings: settings_ };
 
 // Private-mode Safari throws on localStorage, and a thrown preference must
 // not take the navigation down with it.
@@ -20,29 +25,12 @@ function isRailCollapsed() {
   try { return localStorage.getItem(RAIL_KEY) === '1'; } catch (_) { return false; }
 }
 
-const NAV_ITEMS = [
-  { id: 'dashboard', icon: 'fa-house',        label: 'Dashboard' },
-  { id: 'networth',  icon: 'fa-chart-line',   label: 'Net Worth' },
-  { id: 'fi',        icon: 'fa-bullseye',     label: 'FI Planner' },
-  { id: 'points',    icon: 'fa-credit-card',  label: 'Points & Rewards' },
-  { id: 'ledger',    icon: 'fa-timeline',     label: 'Life' },
-  { id: 'food',      icon: 'fa-utensils',     label: 'Food' },
-  { id: 'dishes',    icon: 'fa-book-open',    label: 'Dishes' },
-  { id: 'health',    icon: 'fa-heart-pulse',  label: 'Health' },
-  { id: 'settings',  icon: 'fa-sliders',      label: 'Settings' },
-];
-
 export function renderApp(session) {
-  // Register all routes
-  registerRoute('dashboard', renderDashboard);
-  registerRoute('networth',  renderNetWorth);
-  registerRoute('points',    renderPoints);
-  registerRoute('fi',        renderFI);
-  registerRoute('ledger',    renderLedger);
-  registerRoute('food',      renderFood);
-  registerRoute('dishes',    renderDishes);
-  registerRoute('health',    renderHealth);
-  registerRoute('settings',  renderSettings);
+  // Register all routes — the same list the sidebar is drawn from.
+  for (const { id } of NAV_ITEMS) {
+    const view = VIEWS[id];
+    registerRoute(id, view.render, view.unmount);
+  }
 
   const userEmail = session?.user?.email || '';
   // Falls back to the local part of the email until a display name is set.

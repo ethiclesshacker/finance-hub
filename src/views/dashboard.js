@@ -1,14 +1,24 @@
-import { Chart } from '../vendor.js';
-import { supabase } from '../supabase.js';
+// ======================================================
+// Dashboard — the one screen that reads everything.
+//
+// It composes rather than computes: net worth rows come from the same
+// fetcher the Net Worth screen uses, points arithmetic from points-math.js,
+// and the two charts from charts.js, so the figure here is always the figure
+// on the screen it summarises.
+// ======================================================
+
 import * as ledger from '../ledger/api.js';
+import { listEntries } from '../networth/api.js';
+import { listTransactions, listRedemptions } from '../points/api.js';
 import { EUR_INR_FALLBACK } from '../constants.js';
 import * as settings from '../settings.js';
 import {
-  formatINR, formatINRFull, formatPercent, destroyChart, makeCopyable, fetchEURtoINR,
-  parseNum, escapeHTML, cssVar, CHART_COLORS, ASSET_COLORS,
+  formatINR, formatINRFull, formatPercent, destroyChart, fetchEURtoINR, escapeHTML,
   computeNet, computeAssets, computeLiquid, computeEmergencyFund,
-  renderKpiCards,
+  renderKpiCards, bannerHTML,
 } from '../utils.js';
+import { netWorthSeriesChart, allocationDoughnut, wireChartToggle } from '../charts.js';
+import { pointsSummary } from '../points-math.js';
 import { impliedSavingsRate } from '../finance.js';
 import { navigateTo } from '../router.js';
 
@@ -16,6 +26,8 @@ let netWorthChart = null;
 let allocationChart = null;
 let netWorthData = [];
 let clockTimer = null;
+// A load that resolves after the user has left must not paint a dead DOM.
+let loadToken = 0;
 
 export async function renderDashboard(container) {
   container.innerHTML = `
@@ -121,21 +133,24 @@ export async function renderDashboard(container) {
   clearInterval(clockTimer);
   clockTimer = setInterval(updateClock, 60_000);
 
-  document.getElementById('nw-chart-line')?.addEventListener('click', () => {
-    document.getElementById('nw-chart-line').classList.add('active');
-    document.getElementById('nw-chart-bar').classList.remove('active');
-    buildNetWorthChart(netWorthData, 'line');
-  });
-  document.getElementById('nw-chart-bar')?.addEventListener('click', () => {
-    document.getElementById('nw-chart-bar').classList.add('active');
-    document.getElementById('nw-chart-line').classList.remove('active');
-    buildNetWorthChart(netWorthData, 'bar');
-  });
+  wireChartToggle('nw-chart-line', 'nw-chart-bar', type => buildNetWorthChart(netWorthData, type));
 
   document.getElementById('dash-goto-points')?.addEventListener('click', () => navigateTo('points'));
   document.getElementById('dash-goto-ledger')?.addEventListener('click', () => navigateTo('ledger'));
 
   await loadDashboardData();
+}
+
+export { renderDashboard as render };
+
+/** Release everything the screen holds before the router replaces its DOM. */
+export function unmount() {
+  loadToken++;
+  clearInterval(clockTimer);
+  clockTimer = null;
+  netWorthChart = destroyChart(netWorthChart);
+  allocationChart = destroyChart(allocationChart);
+  netWorthData = [];
 }
 
 function updateClock() {
@@ -154,69 +169,50 @@ function updateClock() {
   });
 }
 
-/** Points on a transaction, guarding every field. */
-function calcPoints(t) {
-  if (t.points !== null && t.points !== undefined) return parseNum(t.points);
-  return parseNum(t.amount) * parseNum(t.multiplier) / 100;
-}
-
 function showAlert(message) {
   const el = document.getElementById('dash-alert');
   if (!el) return;
-  el.innerHTML = `
-    <div class="dash-banner dash-banner--error" role="alert">
-      <i class="fas fa-triangle-exclamation"></i>
-      <div>
-        <strong>Couldn't load your data.</strong>
-        <div class="dash-banner-sub">${escapeHTML(message)}</div>
-      </div>
-      <button type="button" class="btn-sm btn-ghost" id="dash-retry">Retry</button>
-    </div>
-  `;
+  el.innerHTML = bannerHTML({
+    tone: 'error', title: "Couldn't load your data.", sub: message,
+    action: { id: 'dash-retry', label: 'Retry', ghost: true },
+  });
   document.getElementById('dash-retry')?.addEventListener('click', () => loadDashboardData());
 }
 
 function showEmptyState() {
   const el = document.getElementById('dash-alert');
   if (!el) return;
-  el.innerHTML = `
-    <div class="dash-banner dash-banner--empty">
-      <i class="fas fa-seedling"></i>
-      <div>
-        <strong>No snapshots yet.</strong>
-        <div class="dash-banner-sub">Add your first net worth snapshot and the dashboard fills in.</div>
-      </div>
-      <button type="button" class="btn-sm btn-accent" id="dash-goto-nw">Add snapshot</button>
-    </div>
-  `;
+  el.innerHTML = bannerHTML({
+    tone: 'empty', title: 'No snapshots yet.',
+    sub: 'Add your first net worth snapshot and the dashboard fills in.',
+    action: { id: 'dash-goto-nw', label: 'Add snapshot' },
+  });
   document.getElementById('dash-goto-nw')?.addEventListener('click', () => navigateTo('networth'));
 }
 
 async function loadDashboardData() {
+  const token = ++loadToken;
+
   // The ledger is optional: the dashboard predates it and has to keep working
   // when the migrations have not been run or nothing has been ingested yet.
-  renderLifeStrip().catch(() => hideLifeStrip());
+  renderLifeStrip(token).catch(() => { if (token === loadToken) hideLifeStrip(); });
 
-  const [nwRes, txRes, rdRes, eurRate] = await Promise.all([
-    supabase.from('net_worth_entries').select('*').order('date', { ascending: true }),
-    // The view, not the table: a row linked to a card alert takes its amount
-    // and date from the alert rather than from a typed copy.
-    supabase.from('cc_points').select('*'),
-    supabase.from('cc_redemptions').select('*'),
-    fetchEURtoINR(EUR_INR_FALLBACK),
-  ]);
-
-  // A failed query used to be swallowed by `?.data || []`, so a network drop or
-  // a denied RLS policy rendered a confident, well-formatted net worth of ₹0.
-  const failure = nwRes.error || txRes.error || rdRes.error;
-  if (failure) {
-    showAlert(failure.message);
+  let entries, transactions, redemptions, eurRate;
+  try {
+    [entries, transactions, redemptions, eurRate] = await Promise.all([
+      listEntries(), listTransactions(), listRedemptions(), fetchEURtoINR(EUR_INR_FALLBACK),
+    ]);
+  } catch (err) {
+    // A failed query used to be swallowed by `?.data || []`, so a network drop
+    // or a denied RLS policy rendered a confident, well-formatted net worth of ₹0.
+    if (token === loadToken) showAlert(err.message);
     return;
   }
+  if (token !== loadToken || !document.getElementById('dashboard-kpis')) return;
 
-  const entries      = nwRes.data || [];
-  const transactions = txRes.data || [];
-  const redemptions  = rdRes.data || [];
+  entries      = entries || [];
+  transactions = transactions || [];
+  redemptions  = redemptions || [];
   netWorthData = entries;
 
   const alertEl = document.getElementById('dash-alert');
@@ -237,21 +233,15 @@ async function loadDashboardData() {
   if (heroEl) heroEl.textContent = entries.length ? formatINRFull(netWorth) : '—';
   if (changeEl && prev) {
     const isPos = nwChange >= 0;
-    changeEl.innerHTML = `<span style="color:${isPos ? 'var(--success)' : 'var(--danger)'}">${isPos ? '↑' : '↓'} ${Math.abs(nwChange).toFixed(1)}%</span> from last snapshot`;
+    changeEl.innerHTML = `<span class="${isPos ? 'is-up' : 'is-down'}">${isPos ? '↑' : '↓'} ${Math.abs(nwChange).toFixed(1)}%</span> from last snapshot`;
   } else if (changeEl) {
     changeEl.textContent = entries.length ? 'First snapshot' : 'No data yet';
   }
 
   // ── Points ────────────────────────────────────────────
-  const pointsPerEur  = settings.get('points_per_eur');
-  const totalAccrued  = transactions.reduce((s, t) => s + calcPoints(t), 0);
-  const totalRedeemed = redemptions.reduce((s, r) => s + parseNum(r.points_redeemed), 0);
-  const balance       = totalAccrued - totalRedeemed;
-  const balanceINR    = pointsPerEur > 0 ? (balance / pointsPerEur) * eurRate : 0;
-  const totalSpent    = transactions.reduce((s, t) => s + parseNum(t.amount), 0);
-  const rdValue       = redemptions.reduce((s, r) => s + parseNum(r.value_amount), 0);
-  const rewardRate    = totalSpent > 0 ? ((rdValue + balanceINR) / totalSpent) * 100 : 0;
-  const rewardTarget  = settings.get('cc_reward_target_rate');
+  const pointsPerEur = settings.get('points_per_eur');
+  const pts = pointsSummary(transactions, redemptions, { pointsPerEur, eurRate });
+  const rewardTarget = settings.get('cc_reward_target_rate');
 
   const fxBadge = document.getElementById('fx-badge');
   if (fxBadge) fxBadge.textContent = `· 1 EUR = ₹${eurRate.toFixed(0)}`;
@@ -269,7 +259,7 @@ async function loadDashboardData() {
   const savings = impliedSavingsRate(entries, settings.get('monthly_net_income'), 12);
   const budgetRate = settings.budgetedSavingsRate();
 
-  const kpis = [
+  renderKpiCards(document.getElementById('dashboard-kpis'), [
     {
       id: 'dk-assets', label: 'Total assets', icon: 'fa-building-columns',
       value: formatINRFull(totalAssets), raw: totalAssets,
@@ -299,15 +289,13 @@ async function loadDashboardData() {
     },
     {
       id: 'dk-runway', label: 'Emergency runway', icon: 'fa-shield-halved',
-      glow: runwayOK ? 'var(--success-glow)' : 'var(--warning-glow)',
+      tone: runwayOK ? 'success' : 'warning',
       value: runway.toFixed(1), unit: 'months', raw: runway.toFixed(1),
       badge: { text: runwayOK ? 'Healthy' : 'Build up', type: runwayOK ? 'positive' : 'neutral' },
       sub: `${basis === 'cash_like' ? 'Cash + FDs' : 'Liquid'} ÷ ₹${(monthlyExp / 1000).toFixed(0)}k/mo`,
       tooltip: `${basis === 'cash_like' ? 'Cash and fixed deposits' : 'Cash, stocks and mutual funds'} ÷ monthly baseline expenses. Target ≥ ${runwayTarget} months.`,
     },
-  ];
-
-  renderKpiCards(document.getElementById('dashboard-kpis'), kpis);
+  ]);
 
   // ── Points Strip ──────────────────────────────────────
   const strip = document.getElementById('points-strip');
@@ -315,128 +303,48 @@ async function loadDashboardData() {
     const items = [
       {
         label: 'Accrued',
-        value: Math.round(totalAccrued).toLocaleString('en-IN') + ' pts',
+        value: Math.round(pts.totalAccrued).toLocaleString('en-IN') + ' pts',
         sub: `${transactions.length} transactions`,
-        color: 'var(--success)',
+        tone: 'success',
       },
       {
         label: 'Redeemed',
-        value: Math.round(totalRedeemed).toLocaleString('en-IN') + ' pts',
-        sub: `Value: ${formatINRFull(rdValue)}`,
-        color: 'var(--danger)',
+        value: Math.round(pts.totalRedeemed).toLocaleString('en-IN') + ' pts',
+        sub: `Value: ${formatINRFull(pts.totalRdValue)}`,
+        tone: 'danger',
       },
       {
         label: 'Balance value',
-        value: formatINRFull(balanceINR),
-        sub: `${pointsPerEur > 0 ? (balance / pointsPerEur).toFixed(0) : 0} EUR`,
-        color: 'var(--accent)',
+        value: formatINRFull(pts.balanceINR),
+        sub: `${pts.balanceEUR.toFixed(0)} EUR`,
+        tone: 'accent',
       },
       {
         label: 'Reward rate',
-        value: formatPercent(rewardRate),
-        sub: rewardRate >= rewardTarget ? `Above the ${rewardTarget}% target` : `Target: above ${rewardTarget}%`,
-        color: rewardRate >= rewardTarget ? 'var(--success)' : 'var(--warning)',
+        value: formatPercent(pts.rewardRate),
+        sub: pts.rewardRate >= rewardTarget ? `Above the ${rewardTarget}% target` : `Target: above ${rewardTarget}%`,
+        tone: pts.rewardRate >= rewardTarget ? 'success' : 'warning',
       },
     ];
 
     strip.innerHTML = items.map((item, i) => `
       <div class="points-strip-item ${i < items.length - 1 ? 'has-divider' : ''}">
         <div class="psi-label">${escapeHTML(item.label)}</div>
-        <div class="psi-value mono" style="color:${item.color}">${escapeHTML(item.value)}</div>
+        <div class="psi-value mono is-${item.tone}">${escapeHTML(item.value)}</div>
         <div class="psi-sub">${escapeHTML(item.sub)}</div>
       </div>
     `).join('');
   }
 
   buildNetWorthChart(entries, 'line');
-  buildAllocationChart(latest);
+  allocationChart = destroyChart(allocationChart);
+  allocationChart = allocationDoughnut(document.getElementById('dash-alloc-chart'), latest);
 }
 
 function buildNetWorthChart(entries, type = 'line') {
   netWorthChart = destroyChart(netWorthChart);
-  const ctx = document.getElementById('dash-nw-chart');
-  if (!ctx || !entries.length) return;
-
-  const labels = entries.map(e => e.date);
-  const data   = entries.map(e => computeNet(e));
-
-  const gradient = ctx.getContext('2d').createLinearGradient(0, 0, 0, 220);
-  gradient.addColorStop(0, 'rgba(56,189,248,0.22)');
-  gradient.addColorStop(1, 'rgba(56,189,248,0)');
-
-  netWorthChart = new Chart(ctx, {
-    type: type === 'bar' ? 'bar' : 'line',
-    data: {
-      labels,
-      datasets: [{
-        label: 'Net worth',
-        data,
-        borderColor: CHART_COLORS.accent,
-        backgroundColor: type === 'line' ? gradient : 'rgba(56,189,248,0.3)',
-        borderWidth: 2, fill: true, tension: 0.4,
-        pointBackgroundColor: CHART_COLORS.accent,
-        pointRadius: 3, pointHoverRadius: 6,
-      }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: { callbacks: { label: ctx => ' ' + formatINRFull(ctx.parsed.y) } }
-      },
-      scales: {
-        x: { type: 'time', time: { unit: 'month', displayFormats: { month: 'MMM yy' } }, grid: { display: false }, ticks: { maxRotation: 0 } },
-        y: {
-          grid: { color: 'rgba(148,163,184,0.06)' },
-          ticks: {
-            callback: v => {
-              if (Math.abs(v) >= 1e7) return '₹' + (v / 1e7).toFixed(1) + 'Cr';
-              if (Math.abs(v) >= 1e5) return '₹' + (v / 1e5).toFixed(1) + 'L';
-              return '₹' + (v / 1000).toFixed(0) + 'k';
-            }
-          }
-        }
-      }
-    }
-  });
+  netWorthChart = netWorthSeriesChart(document.getElementById('dash-nw-chart'), entries, type);
 }
-
-function buildAllocationChart(latest) {
-  allocationChart = destroyChart(allocationChart);
-  const ctx = document.getElementById('dash-alloc-chart');
-  if (!ctx || !latest) return;
-
-  const fields = [
-    { key: 'stocks',       label: 'Stocks',       color: ASSET_COLORS.stocks },
-    { key: 'mutual_funds', label: 'Mutual Funds', color: ASSET_COLORS.mutual_funds },
-    { key: 'cash',         label: 'Cash',         color: ASSET_COLORS.cash },
-    { key: 'epf',          label: 'EPF',          color: ASSET_COLORS.epf },
-    { key: 'gold',         label: 'Gold',         color: ASSET_COLORS.gold },
-    { key: 'fds',          label: 'FDs',          color: ASSET_COLORS.fds },
-  ].filter(f => (latest[f.key] || 0) > 0);
-
-  allocationChart = new Chart(ctx, {
-    type: 'doughnut',
-    data: {
-      labels: fields.map(f => f.label),
-      datasets: [{
-        data: fields.map(f => latest[f.key] || 0),
-        backgroundColor: fields.map(f => f.color),
-        // Resolved off the document — `var(--bg-card)` never resolves on a canvas.
-        borderColor: cssVar('--bg-card', '#1e293b'),
-        borderWidth: 3, hoverOffset: 8,
-      }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false, cutout: '72%',
-      plugins: {
-        legend: { position: 'bottom', labels: { padding: 14, usePointStyle: true, pointStyleWidth: 8, font: { size: 11 } } },
-        tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${formatINR(ctx.parsed)}` } }
-      }
-    }
-  });
-}
-
 
 // ======================================================
 // This month, actually
@@ -459,16 +367,17 @@ function hideLifeStrip() {
   strip?.closest('.chart-card')?.remove();
 }
 
-async function renderLifeStrip() {
+async function renderLifeStrip(token) {
   const strip = document.getElementById('dash-life-strip');
   if (!strip) return;
 
-  const zone = settings.get('ledger_timezone') || 'Asia/Kolkata';
   const now = new Date();
   const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
   const from = new Date(`${monthStart}T00:00:00`).toISOString();
 
   const stats = await ledger.stats(from, null);
+  if (token !== loadToken || !strip.isConnected) return;
+
   const spent = Number(stats?.spend?.total) || 0;
   const budget = settings.get('monthly_expenses');
   const eventCount = Number(stats?.event_count) || 0;
