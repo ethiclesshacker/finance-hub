@@ -13,9 +13,6 @@ function defaults() {
 }
 
 let cache = defaults();
-// Keys the user has actually saved. A default is a guess, and a screen that
-// compares the record against it should be able to say so.
-let stored = new Set();
 
 /**
  * Coerce a stored value to its declared type. jsonb round-trips types properly,
@@ -51,7 +48,6 @@ export async function loadSettings() {
     // take the app down — defaults are always a usable answer.
     console.warn('[settings] falling back to defaults:', error.message);
     cache = next;
-    stored = new Set();
     return { settings: cache, error };
   }
 
@@ -59,7 +55,6 @@ export async function loadSettings() {
     const value = coerce(row.key, row.value);
     if (value !== undefined) next[row.key] = value;
   }
-  stored = new Set((data || []).map(row => row.key).filter(key => key in SETTINGS_SCHEMA));
 
   cache = next;
   return { settings: cache, error: null };
@@ -68,11 +63,6 @@ export async function loadSettings() {
 /** Synchronous read. Returns the default until loadSettings() has resolved. */
 export function get(key) {
   return cache[key];
-}
-
-/** True once the user has saved `key`; false while it is still the schema default. */
-export function isSet(key) {
-  return stored.has(key);
 }
 
 /** The whole settings object (a copy — mutating it does nothing). */
@@ -96,7 +86,7 @@ export async function saveSettings(patch) {
     .upsert(rows, { onConflict: 'user_id,key' });
 
   if (!error) {
-    for (const row of rows) { cache[row.key] = row.value; stored.add(row.key); }
+    for (const row of rows) cache[row.key] = row.value;
   }
   return { error };
 }
@@ -109,7 +99,7 @@ export async function resetSetting(key) {
   const { error } = await supabase
     .from('user_settings').delete().eq('user_id', userId).eq('key', key);
 
-  if (!error) { cache[key] = SETTINGS_SCHEMA[key].default; stored.delete(key); }
+  if (!error) cache[key] = SETTINGS_SCHEMA[key].default;
   return { error };
 }
 

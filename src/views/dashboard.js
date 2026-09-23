@@ -257,16 +257,6 @@ async function loadDashboardData() {
     })
     .catch(() => {});
 
-  for (const [key, label, readers] of [
-    ['monthly_expenses', 'monthly budget', 'runway, FI target and this month’s pace read it'],
-    ['monthly_net_income', 'monthly income', 'the savings rate reads it'],
-  ]) {
-    if (!settings.isSet(key)) todo.add(key, {
-      icon: 'fa-sliders', goto: 'settings', action: 'Set it',
-      text: `Your ${label} is still the ${formatINRFull(settings.get(key))} placeholder, and ${readers}`,
-    });
-  }
-
   let entries, transactions, redemptions, eurRate;
   try {
     [entries, transactions, redemptions, eurRate] = await Promise.all([
@@ -451,8 +441,7 @@ function formatAge(days) {
 // Worth a look
 //
 // The things only you can close: events the ledger could not read with
-// confidence, card spends labelled by a rule, a stale snapshot, a setting
-// still on its placeholder. Items arrive from several loads at different
+// confidence, card spends labelled by a rule, a stale snapshot. Items arrive from several loads at different
 // times, so the list is keyed and redrawn on each arrival.
 // ======================================================
 
@@ -602,7 +591,6 @@ function renderMonth(days, stats, today) {
   const personal = Math.max(spend - work, 0);
 
   const budget = settings.get('monthly_expenses');
-  const budgetIsReal = settings.isSet('monthly_expenses');
 
   // Pace, not just position: a third of the way through the month, half the
   // budget gone is the thing worth knowing.
@@ -615,9 +603,7 @@ function renderMonth(days, stats, today) {
   const categories = Object.entries(stats?.spend?.by_category || {})
     .sort((a, b) => b[1] - a[1]).slice(0, 5);
 
-  const note = !budgetIsReal
-    ? `The budget is a placeholder, not yours — set it in Settings and this line means something.`
-    : overPace
+  const note = overPace
       ? `Ahead of pace — ${formatINRFull(personal - expected)} above where day ${dayOfMonth} would put you.`
       : `On pace. Day ${dayOfMonth} of ${daysInMonth}.`;
 
@@ -628,14 +614,14 @@ function renderMonth(days, stats, today) {
         <div class="life-spend-sub">
           personal, across ${events} event${events === 1 ? '' : 's'}
           ${work ? ` · plus ${escapeHTML(formatINRFull(work))} work` : ''}
-          · budget ${escapeHTML(formatINRFull(budget))}${budgetIsReal ? '' : ' (default)'}
+          · budget ${escapeHTML(formatINRFull(budget))}
         </div>
         <div class="progress-wrap life-bar">
-          <div class="progress-bar ${overPace && budgetIsReal ? 'is-over' : ''}" style="width:${pct.toFixed(1)}%"></div>
+          <div class="progress-bar ${overPace ? 'is-over' : ''}" style="width:${pct.toFixed(1)}%"></div>
           <span class="life-pace" style="left:${Math.min((dayOfMonth / daysInMonth) * 100, 100).toFixed(1)}%"
                 title="Where the month is: day ${dayOfMonth} of ${daysInMonth}"></span>
         </div>
-        <div class="life-spend-note ${overPace && budgetIsReal ? 'is-over' : ''}">${escapeHTML(note)}</div>
+        <div class="life-spend-note ${overPace ? 'is-over' : ''}">${escapeHTML(note)}</div>
       </div>
       <div class="life-cats">
         ${categories.length ? categories.map(([key, value]) => `
