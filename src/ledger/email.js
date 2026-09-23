@@ -24,8 +24,9 @@
 // ledger, and the rest lands in the review queue.
 // ======================================================
 
-import { canonicalMerchant, entityRef, isFoodMerchant, isPaymentRail, normalizeName, parseAddress,
-         pickTotalAmount, parseDateParts, parseTimeParts, zonedISO } from './normalize.js';
+import { canonicalMerchant, entityRef, formatMoney, isFoodMerchant, isPaymentRail, normalizeName,
+         parseAddress, pickTotalAmount, parseDateParts, parseTimeParts, prune, zonedISO } from './normalize.js';
+import { DEFAULT_TIME_ZONE } from './dates.js';
 import { deriveDedupeKey, matchKeys } from './dedupe.js';
 import { parseOrderItems } from './items.js';
 
@@ -50,10 +51,6 @@ const NEVER = [
   // A payment that failed is not a transaction. The mail still names the
   // restaurant, the order number and the amount, so left to the model it reads
   // as a meal — and spends a call to arrive there.
-  /\bpayment\s+failed\b/i,
-  // A payment that failed is not a transaction. The mail still names the
-  // restaurant, the order number and the amount, so left alone it reads as a
-  // meal — and asking the model about it only spends money to be told so.
   /\bpayment\s+failed\b/i,
   // A reminder is about something that has *not* happened. Recording it would
   // put a non-event in the ledger, and the real payment arrives by email later.
@@ -116,7 +113,7 @@ export function triage(message, ctx = {}) {
   const address = (from.address || '').toLowerCase();
 
   for (const re of NEVER) {
-    if (re.test(subject)) return { decision: 'reject', reason: 'never-an-event subject', promotional: false };
+    if (re.test(subject)) return { decision: 'reject', reason: 'never-an-event subject', promotional: false, never: true };
   }
 
   const body = `${subject}\n${message?.text || ''}`;
@@ -507,7 +504,7 @@ function resolveOccurredAt(message, text, ctx = {}) {
 
   if (!dateParts || !timeParts) return emailAt.toISOString();
 
-  const parsed = new Date(zonedISO({ ...dateParts, ...timeParts }, ctx.timeZone || 'Asia/Kolkata'));
+  const parsed = new Date(zonedISO({ ...dateParts, ...timeParts }, ctx.timeZone || DEFAULT_TIME_ZONE));
   const daysApart = Math.abs(parsed - emailAt) / 86_400_000;
   return daysApart <= 3 ? parsed.toISOString() : emailAt.toISOString();
 }
@@ -519,18 +516,6 @@ function issuerName(message) {
 
 function asArray(v) { return v === null || v === undefined ? [] : (Array.isArray(v) ? v : [v]); }
 function slugForKey(v) { return String(v).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''); }
-function formatMoney(amount, currency) {
-  const symbol = { INR: '₹', USD: '$', EUR: '€', GBP: '£' }[currency] || '';
-  // Round only where rounding is invisible. On a ₹10.64 refund it is not.
-  const value = Math.abs(amount) < 100 && !Number.isInteger(amount)
-    ? amount.toFixed(2)
-    : Math.round(amount).toLocaleString('en-IN');
-  return `${symbol}${value}`;
-}
-function prune(obj) {
-  return Object.fromEntries(Object.entries(obj).filter(([, v]) =>
-    v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && !v.length)));
-}
 
 /**
  * Attach the dedupe key and fuzzy match keys an extraction implies.
@@ -620,7 +605,7 @@ function mailtoOf(v) {
 }
 
 /** ICS timestamp → ISO instant. Floating times take the user's zone. */
-export function icsToISO(field, timeZone = 'Asia/Kolkata') {
+export function icsToISO(field, timeZone = DEFAULT_TIME_ZONE) {
   if (!field?.value) return null;
   const v = String(field.value).trim();
 
@@ -661,7 +646,7 @@ export function icsToISO(field, timeZone = 'Asia/Kolkata') {
  * as dismissed rather than deleted so the next sync cannot recreate it.
  */
 export function fromICS(vevent, ctx = {}) {
-  const tz = ctx.timeZone || 'Asia/Kolkata';
+  const tz = ctx.timeZone || DEFAULT_TIME_ZONE;
   const start = icsToISO(vevent.start, tz);
   if (!start) return null;
 
@@ -707,8 +692,9 @@ export function fromICS(vevent, ctx = {}) {
  * that matched is kept: a merchant that tells you what you bought beats a
  * payment line that only tells you what it cost.
  *
- *   tier 1 — the merchant itself, so the event knows what it was
- *   tier 2 — a payment rail: right amount, no idea what for
+ *   tier 1   — the merchant itself, so the event knows what it was
+ *   tier 1.5 — a payment line that names the payee: who was paid, not what for
+ *   tier 2   — a bare card alert: right amount, no idea what for
  */
 // Senders that issue payment alerts, and phrasing only a payment alert uses.
 const BANK_SENDER = /(bank|hsbc|amex|american\s*express|citi|kotak|axis|icici|hdfc|sbi|idfc|indusind|rbl|yes\s*bank|federal|scb|standardchartered|paytm|phonepe|razorpay|payu|billdesk|cred|npci|upi|onecard|slice)/i;
@@ -740,7 +726,7 @@ const ALERT_SHAPE = new RegExp([
 const BALANCE_NOTICE = /\b(available balance|balance in your account|account balance|closing balance|balance enquiry)\b/i;
 const MOVEMENT = /\b(debited|credited|spent|withdrawn|purchase|paid|transferred)\b/i;
 
-export const SENDER_RULES = [
+const SENDER_RULES = [
   {
     id: 'insurance_policy',
     tier: 1,
@@ -894,7 +880,7 @@ export const SENDER_RULES = [
         subtype: 'train',
         title: `Train${train ? ` ${train[1]}` : ''}${route ? ` ${route[1]} → ${route[2]}` : ''}`,
         occurred_at: dateParts
-          ? zonedISO({ ...dateParts, ...(timeParts || {}) }, ctx.timeZone || 'Asia/Kolkata')
+          ? zonedISO({ ...dateParts, ...(timeParts || {}) }, ctx.timeZone || DEFAULT_TIME_ZONE)
           : new Date(m.date).toISOString(),
         data: prune({
           provider: 'IRCTC',
@@ -985,10 +971,16 @@ export const SENDER_RULES = [
 
   {
     id: 'upi_payment',
-    tier: 1,
     // "Your payment of ₹ 20.0 to Smartworks Tech Solutions is successful"
     // Amazon Pay, PhonePe, GPay and Paytm all use this shape, and it names the
-    // payee — which is what makes it tier 1 rather than a bare card alert.
+    // payee — more specific than a bare card alert, which is why it sits
+    // above tier 2. But it is still the payment line, not the receipt: a
+    // Zomato mail says "paid ₹97 to Happiness Dhaba" inside the order it
+    // describes, and an Uber receipt says "payment of ₹149 to Uber". At tier
+    // 1 this rule matched both and each dinner and each ride became two
+    // events. The merchant's own rule knows what was bought; this one only
+    // knows who was paid.
+    tier: 1.5,
     when: m => {
       const combined = `${m.subject || ''} ${m.text || ''}`;
       return /\b(payment of|paid|sent|payment successful|refund of)\b/i.test(combined)
@@ -1055,8 +1047,12 @@ export const SENDER_RULES = [
     tier: 1,
     // "your CAMPUS order is out for delivery" / "has been delivered".
     // Courier aggregators send these on behalf of whichever brand you bought
-    // from, so the brand comes out of the subject, not the sender.
-    when: m => /\b(out for delivery|has been delivered|is delivered|shipped|dispatched|on its way|arriving)\b/i
+    // from, so the brand comes out of the subject, not the sender. Amazon's
+    // own dispatch mail is the amazon_order rule's: it carries the order
+    // number, which keys the parcel to its purchase, and matching it here as
+    // well made one parcel two events.
+    when: m => !/amazon/i.test(m.from?.address || '') &&
+               /\b(out for delivery|has been delivered|is delivered|shipped|dispatched|on its way|arriving)\b/i
                  .test(m.subject || ''),
     extract: (m) => {
       const subject = m.subject || '';
@@ -1116,8 +1112,6 @@ export const SENDER_RULES = [
       const credit = /\b(credited|credit\s+of|received\s+(?:a\s+)?credits?|refund(?:ed)?|added\s+to)\b/i.test(text)
                   && !/\bdebited\b/i.test(text);
 
-      // Non-greedy, with an explicit stop: the descriptor runs straight into
-      // " on 18/08/26", which a greedy capture swallows as part of the name.
       // "towards VPA uber@icici (UBER INDIA)" names the payee twice, as a
       // handle and as a person or business. Parsed first because it is the
       // better source: the card-descriptor pattern below cannot cross the '@'
@@ -1440,7 +1434,7 @@ export function isSelfPayee(candidates, selfIdentifiers = []) {
   });
 }
 
-export function applySenderRules(message, ctx = {}, ruleErrors = []) {
+function applySenderRules(message, ctx = {}, ruleErrors = []) {
   const matches = [];
 
   for (const rule of SENDER_RULES) {
@@ -1550,9 +1544,12 @@ export function extractDeterministic(message, ctx = {}) {
 
   // Layer 4 is regex over prose, which a campaign can trip: "60% off your next
   // order, up to ₹150" has a merchant, an amount and the word order. Rules only
-  // run once the email is known not to be a campaign.
+  // run once the email is known not to be a campaign — and never on a subject
+  // triage has ruled out outright: a "payment failed" or "rate your order"
+  // mail names a restaurant, an order number and an amount for a thing that
+  // did not happen, and the food rule would read it as a meal.
   const ruleErrors = [];
-  if (!verdict.promotional) {
+  if (!verdict.promotional && !verdict.never) {
     extractions.push(...applySenderRules(message, parseCtx, ruleErrors));
     if (extractions.length) {
       return { decision: 'extracted', reason: extractions.map(e => e.extracted_by).join(','),

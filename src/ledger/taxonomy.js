@@ -11,6 +11,8 @@
 // the ingestion jobs under ledger/, and by the tests.
 // ======================================================
 
+import { DEFAULT_TIME_ZONE, localClock } from './dates.js';
+
 export const EVENT_TYPES = [
   { id: 'activity',      label: 'Activity',      icon: 'fa-person-walking',  color: '#38bdf8' },
   { id: 'purchase',      label: 'Purchase',      icon: 'fa-bag-shopping',    color: '#a78bfa' },
@@ -124,16 +126,14 @@ const MEAL_WINDOWS = [
  * turned up, and labelling one "snacks" would put toilet roll in the middle of
  * an afternoon tea.
  */
-export function mealSlot(instant, timeZone = 'Asia/Kolkata', subtype = null) {
+export function mealSlot(instant, timeZone = DEFAULT_TIME_ZONE, subtype = null) {
   if (subtype === 'groceries') return 'groceries';
 
   const date = instant instanceof Date ? instant : new Date(instant);
   if (Number.isNaN(date.getTime())) return null;
 
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-GB', { timeZone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' })
-      .formatToParts(date).map(p => [p.type, p.value]));
-  const minutes = (Number(parts.hour) % 24) * 60 + Number(parts.minute);
+  const clock = localClock(date, timeZone);
+  const minutes = clock.hour * 60 + clock.minute;
 
   let slot = MEAL_WINDOWS[0].slot;
   for (const window of MEAL_WINDOWS) {
@@ -156,25 +156,6 @@ const SOURCE_INDEX = Object.fromEntries(SOURCE_TYPES.map(s => [s.id, s]));
 export function sourceMeta(id) {
   return SOURCE_INDEX[id] || { id, label: titleCase(id || 'unknown'), icon: 'fa-circle-dot' };
 }
-
-export const ENTITY_TYPES = [
-  'person', 'company', 'merchant', 'restaurant', 'place',
-  'product', 'project', 'organization', 'trip', 'account', 'other',
-];
-
-/** How an entity relates to an event. Also open text in the database. */
-export const RELATIONSHIPS = [
-  'merchant', 'restaurant', 'person', 'attendee', 'sender', 'recipient',
-  'place', 'origin', 'destination', 'project', 'product', 'provider',
-  // The bank behind a card. Counted, but never credited with the spend.
-  'issuer', 'related',
-];
-
-/** How two events relate. */
-export const EVENT_RELATIONSHIPS = [
-  'payment_for', 'order_email', 'confirms', 'part_of', 'booking_for',
-  'refund_for', 'follows', 'related',
-];
 
 function titleCase(s) {
   return String(s).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());

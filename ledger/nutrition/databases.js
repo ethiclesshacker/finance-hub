@@ -38,7 +38,38 @@ const TIMEOUT_MS = 15000;
 // unusable in bulk — set FDC_API_KEY (free, api.data.gov) to use that rung.
 const PACE_MS = 1200;
 
-const tokens = (s) => new Set(String(s).toLowerCase().match(/[a-z]+/g) || []);
+/**
+ * The words in a name, for the judged rungs: letters only, lowercased, with an
+ * optional stop list for glue words that carry no identity. Digits are left
+ * out on purpose here — a database candidate is judged on what it is called,
+ * and the portion is read from the name separately by gramsFromName().
+ */
+export const tokenize = (s, stop = null) => new Set(
+  (String(s).toLowerCase().match(/[a-z]+/g) || []).filter((t) => !stop?.has(t)));
+
+/**
+ * Per-100g numbers → the per-serving row every rung writes.
+ *
+ * The three sources that answer in per-100g terms (OFF, FDC, INDB) all end up
+ * here, so "one serving" means the same arithmetic whichever answered.
+ * `source_ref` always carries the per-100g figure the row was scaled from, which
+ * is what makes a wrong portion visible later rather than baked in.
+ */
+export function servingRow({ kcal_100g, protein_100g, carbs_100g, fat_100g }, grams,
+                           { source, confidence, source_ref = {}, category = null }) {
+  const per = (v) => (Number.isFinite(v) ? Math.round((v * grams) / 100 * 10) / 10 : null);
+  return {
+    kcal: per(kcal_100g),
+    protein_g: per(protein_100g),
+    carbs_g: per(carbs_100g),
+    fat_g: per(fat_100g),
+    portion_g: grams,
+    ...(category ? { category } : {}),
+    source,
+    confidence,
+    source_ref: { ...source_ref, kcal_100g },
+  };
+}
 
 /**
  * How much of the *query* the candidate's name accounts for.
@@ -50,7 +81,7 @@ const tokens = (s) => new Set(String(s).toLowerCase().match(/[a-z]+/g) || []);
  * covers one of three tokens in "Bhindi Roti Thali" and is correctly rejected.
  */
 function coverage(query, candidate) {
-  const q = tokens(query), c = tokens(candidate);
+  const q = tokenize(query), c = tokenize(candidate);
   if (!q.size || !c.size) return 0;
   const hit = [...q].filter((t) => c.has(t)).length;
   return hit / q.size;
@@ -123,7 +154,7 @@ async function getJson(url, headers = {}) {
 }
 
 /** Open Food Facts. No key required. Best on Indian packaged snacks. */
-export async function searchOFF(query) {
+async function searchOFF(query) {
   const url = new URL(OFF_URL);
   url.searchParams.set('search_terms', query);
   url.searchParams.set('search_simple', '1');
@@ -160,7 +191,7 @@ export async function searchOFF(query) {
  * rung reports itself unconfigured and the ladder moves on, which is the right
  * failure: a missing key should cost accuracy, not abort a run.
  */
-export async function searchFDC(query) {
+async function searchFDC(query) {
   const key = process.env.FDC_API_KEY;
   if (!key) return { ok: false, error: 'FDC_API_KEY not set', candidates: [], unconfigured: true };
 
@@ -237,17 +268,14 @@ export async function lookupBarcode(code) {
   const packG = Number(String(p.quantity || '').match(/(\d+(?:\.\d+)?)\s?g/)?.[1]);
   const grams = servingG || packG || 100;
   const basis = servingG ? 'label_serving' : packG ? 'whole_pack' : 'assumed_100g';
-  const per = (v) => (Number.isFinite(v) ? Math.round((v * grams) / 100 * 10) / 10 : null);
 
   return {
     ok: true,
     display_name: name,
-    row: {
-      kcal: per(kcal100),
-      protein_g: per(Number(n.proteins_100g)),
-      carbs_g: per(Number(n.carbohydrates_100g)),
-      fat_g: per(Number(n.fat_100g)),
-      portion_g: grams,
+    row: servingRow({
+      kcal_100g: kcal100, protein_100g: Number(n.proteins_100g),
+      carbs_100g: Number(n.carbohydrates_100g), fat_100g: Number(n.fat_100g),
+    }, grams, {
       category: 'packaged_snack',
       source: 'off',
       // Higher than the text-search path earns: this is an exact identifier
@@ -255,10 +283,9 @@ export async function lookupBarcode(code) {
       confidence: 0.95,
       source_ref: {
         db: 'off', barcode: clean, name: p.product_name, brand: p.brands || null,
-        kcal_100g: kcal100, quantity: p.quantity || null,
-        portion_basis: basis, matched_by: 'barcode',
+        quantity: p.quantity || null, portion_basis: basis, matched_by: 'barcode',
       },
-    },
+    }),
   };
 }
 
@@ -277,7 +304,8 @@ export async function resolveFromDatabases(displayName) {
 
   for (const [source, search] of [['off', searchOFF], ['fdc', searchFDC]]) {
     const res = await search(displayName);
-    await sleep(PACE_MS);
+    // A rung with no key made no request, so there is nothing to pace.
+    if (!res.unconfigured) await sleep(PACE_MS);
 
     if (!res.ok) {
       attempts.push({ source, error: res.error });
@@ -292,26 +320,19 @@ export async function resolveFromDatabases(displayName) {
 
     const c = verdict.best;
     const grams = gramsFromName(displayName) || c.serving_g || 100;
-    const per = (v) => (Number.isFinite(v) ? Math.round((v * grams) / 100 * 10) / 10 : null);
 
     return {
       ok: true,
-      row: {
-        kcal: per(c.kcal_100g),
-        protein_g: per(c.protein_100g),
-        carbs_g: per(c.carbs_100g),
-        fat_g: per(c.fat_100g),
-        portion_g: grams,
+      row: servingRow(c, grams, {
         source,
         confidence: 0.85,
         source_ref: {
           ...c.ref,
-          kcal_100g: c.kcal_100g,
           portion_basis: gramsFromName(displayName) ? 'name' : c.serving_g ? 'db_serving' : 'assumed_100g',
           coverage: Math.round(c.coverage * 100) / 100,
           attempts,
         },
-      },
+      }),
     };
   }
 

@@ -18,8 +18,8 @@
 // being a shop.
 // ======================================================
 
-import { canonicalMerchant, entityRef, localDateISO, parseDateParts,
-         parseTimeParts, pickTotalAmount, zonedISO } from './normalize.js';
+import { canonicalMerchant, entityRef, parseDateParts, parseTimeParts, pickTotalAmount } from './normalize.js';
+import { DEFAULT_TIME_ZONE, localClock, localDateISO, shiftLocalDate, zonedISO } from './dates.js';
 import { deriveDedupeKey, matchKeys } from './dedupe.js';
 import { dishName, summariseItems } from './items.js';
 
@@ -123,8 +123,6 @@ const INTENTS = [
   { re: /\b(visited|went to|went for|went out|dropped by|stopped at|stopped by|swung by|attended|party|wedding|reception|explored|wandered|strolled|checked out)\b/i, type: 'activity', sub: null },
 ];
 
-const FILLER = /\b(around|about|at|approx\.?|approximately|roughly|near|circa)\b/gi;
-
 // A time of day named in words. Weaker than an explicit clock time, stronger
 // than the midday fallback. Phrases before bare words, so "last night" keeps
 // its own hour and its own day.
@@ -179,7 +177,7 @@ function colloquialAmount(text) {
  * the UI can show "food · Third Wave Coffee · 13:00 · ₹320" rather than a
  * silent guess.
  */
-export function parseQuickEntry(input, { now = new Date(), timeZone = 'Asia/Kolkata' } = {}) {
+export function parseQuickEntry(input, { now = new Date(), timeZone = DEFAULT_TIME_ZONE } = {}) {
   const text = expandShorthand(input);
   if (!text) return null;
 
@@ -198,12 +196,8 @@ export function parseQuickEntry(input, { now = new Date(), timeZone = 'Asia/Kolk
   }
 
   // ── When ──
-  const when = resolveDate(text, now, timeZone);
-  const daypart = DAYPARTS.find(d => d.re.test(text)) || null;
-  let meal = null, mealWord = null;
-  for (const [word, spec] of Object.entries(MEALS)) {
-    if (new RegExp(`\\b${word}\\b`, 'i').test(text)) { meal = spec; mealWord = word; break; }
-  }
+  const daypart = findDaypart(text);
+  let [meal, mealWord] = findMeal(text);
 
   // ── What kind of thing ──
   const people = extractPeople(text);
@@ -264,44 +258,9 @@ export function parseQuickEntry(input, { now = new Date(), timeZone = 'Asia/Kolk
     }
   }
 
-  // A named time of day beats a weak meal default: "coffee this morning" is
-  // a morning coffee, not a four-thirty one.
-  const weakMeal = meal && (meal.meal === 'beverage' || meal.meal === 'snack');
-  const clock = resolveTime(text, { daypart, meal });
-
   // ── The instant ──
-  const past = PAST_RE.test(text) && !FUTURE_RE.test(text);
-  const future = FUTURE_RE.test(text) || (when.explicit === false && /\b(tomorrow|next|coming|in \d+ (?:days?|weeks?))\b/i.test(text));
-  let time = clock.time
-    || (meal && !(weakMeal && daypart) ? { hour: meal.hour, minute: meal.minute } : null)
-    || (daypart ? { hour: daypart.hour, minute: daypart.minute } : null)
-    || null;
-  const inference = {};
-  if (!time) {
-    // Nothing said about the hour. Midday for a day in the past; for today,
-    // "just now" is the better guess when midday has not come yet.
-    const nowClock = localClock(now, timeZone);
-    const isToday = when.assumed === 'today' || (relativeDayOffset(text)?.days === 0);
-    if (isToday && !future && nowClock.hour < 12) { time = nowClock; inference.assumed_time = 'now'; }
-    else { time = { hour: 12, minute: 0 }; inference.assumed_time = 'midday default'; }
-  } else if (!clock.time) {
-    inference.assumed_time = meal && !(weakMeal && daypart) ? `${meal.meal} default` : `${daypart.label} default`;
-  } else if (clock.assumed) inference.assumed_time = clock.assumed;
-  if (when.assumed) inference.assumed_date = when.assumed;
+  const { occurredAt, inference, scheduled } = resolveWhen(text, { now, timeZone, meal, daypart, money });
   if (assumedCurrency) inference.assumed_currency = 'INR';
-
-  let occurredAt = zonedISO({ ...when.date, ...time }, timeZone);
-  const isFuture = () => new Date(occurredAt).getTime() > now.getTime() + 60_000;
-
-  // "Had dinner at 9pm" typed at eight is last night's dinner, not tonight's.
-  if (past && isFuture() && when.assumed === 'today') {
-    occurredAt = zonedISO({ ...shiftLocalDate(now, -1, timeZone), ...time }, timeZone);
-    inference.assumed_date = 'yesterday, from the past tense';
-  }
-  // A plan needs a word that says so, or a stated hour still to come. A bare
-  // "Groceries from BigBasket" is a record, however early it was typed; and
-  // money already spent is never a plan.
-  const scheduled = !past && !money && isFuture() && (future || Boolean(clock.time));
 
   // ── Data ──
   const data = {};
@@ -432,6 +391,77 @@ function classify(text, { money, people }) {
   return null;
 }
 
+// ── When ───────────────────────────────────────────────
+
+function findDaypart(text) {
+  return DAYPARTS.find(d => d.re.test(text)) || null;
+}
+
+/** The first meal word in the sentence, with its spec: [spec, word] or [null, null]. */
+function findMeal(text) {
+  for (const [word, spec] of Object.entries(MEALS)) {
+    if (new RegExp(`\\b${word}\\b`, 'i').test(text)) return [spec, word];
+  }
+  return [null, null];
+}
+
+/**
+ * Which day, which hour, and whether the sentence is a plan or a record.
+ *
+ * Shared by both parsers, which used to carry their own copy of this and
+ * drifted in the details. The two differ on purpose in one place, `meal_mode`:
+ *
+ *   - a meal with no stated hour is "now" (you are telling Hermes as you eat),
+ *     where any other event defaults to midday, or to now only before noon;
+ *   - a meal is a plan whenever its hour is still to come, where any other
+ *     event needs a word that says so or a stated hour, and is never a plan
+ *     once money has been spent.
+ *
+ * Returns { occurredAt, inference, scheduled, past }.
+ */
+function resolveWhen(text, { now, timeZone, meal, daypart, money = null, meal_mode = false }) {
+  const when = resolveDate(text, now, timeZone);
+  const clock = resolveTime(text, { daypart, meal });
+
+  // A named time of day beats a weak meal default: "coffee this morning" is
+  // a morning coffee, not a four-thirty one.
+  const weakMeal = !meal_mode && meal && (meal.meal === 'beverage' || meal.meal === 'snack');
+  const mealDefault = meal && !(weakMeal && daypart) ? { hour: meal.hour, minute: meal.minute } : null;
+
+  const past = meal_mode ? PAST_TENSE.test(text) : PAST_RE.test(text) && !FUTURE_RE.test(text);
+  const future = !meal_mode && (FUTURE_RE.test(text)
+    || (when.explicit === false && /\b(tomorrow|next|coming|in \d+ (?:days?|weeks?))\b/i.test(text)));
+
+  const inference = {};
+  let time = clock.time || mealDefault || (daypart ? { hour: daypart.hour, minute: daypart.minute } : null);
+  if (!time) {
+    // Nothing said about the hour. Midday for a day in the past; for today,
+    // "just now" is the better guess when midday has not come yet.
+    const nowClock = localClock(now, timeZone);
+    const isToday = when.assumed === 'today' || (relativeDayOffset(text)?.days === 0);
+    if (meal_mode || (isToday && !future && nowClock.hour < 12)) { time = nowClock; inference.assumed_time = 'now'; }
+    else { time = { hour: 12, minute: 0 }; inference.assumed_time = 'midday default'; }
+  } else if (!clock.time) {
+    inference.assumed_time = mealDefault ? `${meal.meal} default` : `${daypart.label} default`;
+  } else if (clock.assumed) inference.assumed_time = clock.assumed;
+  if (when.assumed) inference.assumed_date = when.assumed;
+
+  let occurredAt = zonedISO({ ...when.date, ...time }, timeZone);
+  const isFuture = () => new Date(occurredAt).getTime() > now.getTime() + 60_000;
+
+  // "Had dinner at 9pm" typed at eight is last night's dinner, not tonight's.
+  if (past && isFuture() && when.assumed === 'today') {
+    occurredAt = zonedISO({ ...shiftLocalDate(now, -1, timeZone), ...time }, timeZone);
+    inference.assumed_date = 'yesterday, from the past tense';
+  }
+  // A plan needs a word that says so, or a stated hour still to come. A bare
+  // "Groceries from BigBasket" is a record, however early it was typed; and
+  // money already spent is never a plan.
+  const scheduled = !past && isFuture() && (meal_mode || (!money && (future || Boolean(clock.time))));
+
+  return { occurredAt, inference, scheduled, past };
+}
+
 // ── Dates ──────────────────────────────────────────────
 
 /**
@@ -499,12 +529,6 @@ function relativeDayOffset(text) {
   if (/\b(last week)\b/i.test(text)) return { days: -7, assumed: 'a week ago, from "last week"' };
   if (/\b(last month)\b/i.test(text)) return { days: -30, assumed: 'a month ago, from "last month"' };
   return null;
-}
-
-function shiftLocalDate(now, days, timeZone) {
-  const [year, month, day] = localDateISO(now, timeZone).split('-').map(Number);
-  const shifted = new Date(Date.UTC(year, month - 1, day + days));
-  return { year: shifted.getUTCFullYear(), month: shifted.getUTCMonth(), day: shifted.getUTCDate() };
 }
 
 /**
@@ -786,15 +810,14 @@ const TYPE_LABEL = {
 /**
  * The thing the verb acted on: "bought a keyboard" → "keyboard", "watched
  * Dune" → "Dune", "cab to airport" → null (the place is the point). Cut at
- * the first word that starts a circumstance.
+ * the first word that starts a circumstance. Only a purchase and a piece of
+ * entertainment carry an object into `data` and the title, so only those two
+ * are read.
  */
 function extractObject(text, intent) {
   const verbs = {
     purchase: /\b(?:bought|purchased|ordered|picked up|got myself|treated myself to|paid for|renewed|subscribed to)\s+(?:a\s+|an\s+|the\s+|some\s+|new\s+|my\s+|\d+\s+)?/i,
     entertainment: /\b(?:watched|watching|saw|read|reading|finished reading|started reading|played|playing|listened to)\s+(?:a\s+|an\s+|the\s+|some\s+)?/i,
-    work: /\b(?:worked on|working on|shipped|deployed|released|merged|fixed|debugged|wrote|drafted|refactored|reviewed|presented|pitched|submitted|finished|completed|wrapped up)\s+(?:a\s+|an\s+|the\s+|some\s+|my\s+)?/i,
-    subscription: /\b(?:subscribed to|renewed|cancel+ed)\s+(?:my\s+|the\s+|a\s+)?/i,
-    delivery: /\b(?:received|got|delivered)\s+(?:my\s+|the\s+|a\s+)?/i,
   }[intent.type];
   if (!verbs) return null;
   const m = text.match(verbs);
@@ -898,12 +921,6 @@ function buildTitle({ text, canonical, intent, gift, transfer, meal, mealWord, p
   const sentence = cleanedSentence(text);
   return sentence || TYPE_LABEL[intent.type] || 'Event';
 }
-
-/** Strip the filler words the parser ignores — used by the preview. */
-export function stripFiller(text) {
-  return String(text).replace(FILLER, ' ').replace(/\s+/g, ' ').trim();
-}
-
 
 // ======================================================
 // Meals, specifically.
@@ -1016,26 +1033,19 @@ export function parseMealItems(input, { declared: forced = false } = {}) {
  * and the ledger already distinguishes a plan from a thing that happened. It
  * becomes an ordinary meal the moment you add what you actually ate.
  */
-export function parseMealEntry(input, { now = new Date(), timeZone = 'Asia/Kolkata' } = {}) {
+export function parseMealEntry(input, { now = new Date(), timeZone = DEFAULT_TIME_ZONE } = {}) {
   const text = String(input || '').trim();
   if (!text) return null;
 
-  const when = resolveDate(text, now, timeZone);
-  const daypart = DAYPARTS.find(d => d.re.test(text)) || null;
+  const daypart = findDaypart(text);
+  const [meal] = findMeal(text);
 
-  let meal = null;
-  for (const [word, spec] of Object.entries(MEALS)) {
-    if (new RegExp(`\\b${word}\\b`, 'i').test(text)) { meal = spec; break; }
-  }
-
-  const clock = resolveTime(text, { daypart, meal });
-  const explicitTime = clock.time;
-  const base = when.date;
-  const time = explicitTime
-    || (meal ? { hour: meal.hour, minute: meal.minute } : null)
-    || (daypart ? { hour: daypart.hour, minute: daypart.minute } : null)
-    || localClock(now, timeZone);
-  const occurredAt = zonedISO({ ...base, ...time }, timeZone);
+  // Not yet eaten is `scheduled`: the Food screen still shows it, so the plan
+  // is visible and the dishes can be filled in when there are dishes to fill
+  // in. Except when the sentence is in the past — "had dinner at Kapoor's",
+  // typed over breakfast, is last night's dinner and not tonight's, and
+  // scheduling it would put a meal already eaten in the future.
+  const { occurredAt: occurred, inference, scheduled } = resolveWhen(text, { now, timeZone, meal, daypart, meal_mode: true });
 
   // Split the occasion from the food before reading either, so "at home" can
   // never swallow the dish that follows it.
@@ -1054,29 +1064,6 @@ export function parseMealEntry(input, { now = new Date(), timeZone = 'Asia/Kolka
     const bare = bareAmount(text);
     if (bare !== null) money = { amount: bare, currency: 'INR' };
   }
-
-  const inference = {};
-  if (!explicitTime) {
-    inference.assumed_time = meal ? `${meal.meal} default`
-                           : daypart ? `${daypart.label} default`
-                           : 'now';
-  } else if (clock.assumed) inference.assumed_time = clock.assumed;
-  if (when.assumed) inference.assumed_date = when.assumed;
-
-  // Not yet eaten. The Food screen still shows it, so the plan is visible and
-  // the dishes can be filled in when there are dishes to fill in.
-  //
-  // Except when the sentence is in the past: "had dinner at Kapoor's", typed
-  // over breakfast, is last night's dinner and not tonight's — the meal's
-  // default hour is ahead of the clock, and scheduling it would put a meal you
-  // have already eaten in the future.
-  const past = PAST_TENSE.test(text);
-  let occurred = occurredAt;
-  if (past && new Date(occurred).getTime() > now.getTime() && when.assumed === 'today') {
-    occurred = zonedISO({ ...shiftLocalDate(now, -1, timeZone), ...time }, timeZone);
-    inference.assumed_date = 'yesterday, from the past tense';
-  }
-  const scheduled = !past && new Date(occurred).getTime() > now.getTime() + 60_000;
 
   const data = {};
   if (canonical) data.restaurant = canonical.name;
@@ -1110,14 +1097,6 @@ export function parseMealEntry(input, { now = new Date(), timeZone = 'Asia/Kolka
       assumed: Object.keys(inference),
     },
   };
-}
-
-/** The wall clock where the user is, so "now" means now to them. */
-function localClock(now, timeZone) {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-GB', { timeZone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' })
-      .formatToParts(now).map(p => [p.type, p.value]));
-  return { hour: Number(parts.hour) % 24, minute: Number(parts.minute) };
 }
 
 function capitalise(word) {

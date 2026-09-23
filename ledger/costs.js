@@ -36,27 +36,21 @@ function prices() {
 /**
  * Cost of one call, or null when the model has no price configured.
  *
- * Cached input tokens are billed differently and are already counted inside
- * prompt_tokens, so they are subtracted out before the full-price multiply —
- * otherwise a well-cached run reads as more expensive than it was.
+ * Cached and freshly-written tokens are billed differently and are already
+ * counted inside prompt_tokens, so they come out before the full-price
+ * multiply — otherwise a well-cached run reads as more expensive than it was.
+ *
+ * Short-context rates only. The pricing file also lists long-context rates,
+ * which apply above 128k prompt tokens; this pipeline's calls run one to five
+ * thousand, so that table is kept for reference and never consulted.
  */
-export function costOf(model, usage) {
-  const configured = prices()[model];
-  if (!configured || configured.input == null || configured.output == null) return null;
+function costOf(model, usage) {
+  const price = prices()[model];
+  if (!price || price.input == null || price.output == null) return null;
 
   const prompt = usage?.prompt_tokens || 0;
-  // Long-context pricing kicks in above a threshold. This pipeline's calls run
-  // one to five thousand tokens, so it never gets there — but the rate table
-  // should still be right rather than merely adequate.
-  const price = (configured.long_context && prompt > (configured.long_context_threshold ?? Infinity))
-    ? { ...configured, ...configured.long_context }
-    : configured;
-
   const cached = usage?.prompt_tokens_details?.cached_tokens || 0;
   const written = usage?.prompt_tokens_details?.cache_write_tokens || 0;
-  // Cached and freshly-written tokens are both counted inside prompt_tokens,
-  // so they come out before the full-price multiply — otherwise a well-cached
-  // run reads as more expensive than it was.
   const fresh = Math.max(prompt - cached - written, 0);
   const output = usage?.completion_tokens || 0;
 
@@ -84,9 +78,6 @@ export function recordUsage({ job, model, usage, meta = {}, ok = true, error = n
       cache_write_tokens: usage?.prompt_tokens_details?.cache_write_tokens ?? 0,
       reasoning_tokens: usage?.completion_tokens_details?.reasoning_tokens ?? 0,
       total_tokens: usage?.total_tokens ?? 0,
-      // A snapshot of what it cost under the rates in force at the time. Kept
-      // for the record, but never what a total is built from — see below.
-      cost_usd: costOf(model, usage),
       ...meta,
     };
     mkdirSync(dirname(COST_FILE), { recursive: true });
@@ -98,7 +89,7 @@ export function recordUsage({ job, model, usage, meta = {}, ok = true, error = n
 }
 
 /** Every recorded call, newest last. */
-export function readUsage() {
+function readUsage() {
   if (!existsSync(COST_FILE)) return [];
   return readFileSync(COST_FILE, 'utf8')
     .split('\n')
@@ -108,12 +99,10 @@ export function readUsage() {
 }
 
 /**
- * Recompute a row's cost from its tokens under today's price table.
- *
- * Reading the stored cost_usd instead would freeze every row at the rates that
- * happened to be configured when it was written — which, for calls recorded
- * before the rates were known at all, means a permanent blank. Tokens are the
- * fact; money is a view of them.
+ * A row's cost from its tokens under today's price table. Nothing about money
+ * is stored with the row: a stored figure would freeze it at whatever rate was
+ * configured at the time, and for calls recorded before the rates were known
+ * at all that is a permanent blank. Tokens are the fact; money is a view.
  */
 function rowCost(row) {
   return costOf(row.model, {

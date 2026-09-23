@@ -15,6 +15,7 @@
 // ======================================================
 
 import { normalizeName } from './normalize.js';
+import { startOfWeek } from './dates.js';
 
 /** Dictionary rows → a Map keyed the way the line items will be looked up. */
 export function indexDictionary(rows = []) {
@@ -79,18 +80,23 @@ export function eventNutrition(event, dict) {
 /**
  * Roll a list of events up into per-day totals and the coverage behind them.
  *
+ * `nutritionOf` is how each event's verdict is read; the default prices it
+ * against the dictionary here. The jobs hand in rows that food_event_nutrition
+ * already rolled up in SQL, and pass a reader for those, so there is one
+ * rollup and not one per caller.
+ *
  * Days are the unit that matters for eating, and the denominator is deliberately
  * "days you actually ate something we could price" — not calendar days. A
  * ledger built from receipts has nothing to say about the days you cooked, and
  * averaging those in as zeroes would invent a number rather than report one.
  */
-export function summarise(events, dict, { dateOf }) {
+export function summarise(events, dict, { dateOf, nutritionOf = event => eventNutrition(event, dict) }) {
   const days = new Map();
   let priced = 0, partial = 0, unknown = 0;
   let kcal = 0, protein = 0;
 
   for (const event of events) {
-    const n = eventNutrition(event, dict);
+    const n = nutritionOf(event);
     if (n.basis === 'none') { unknown++; continue; }
     if (n.basis === 'partial') partial++;
     priced++;
@@ -137,14 +143,9 @@ export function bucketDays(days, grain) {
     return days.map(d => ({ key: d.day, at: d.day, kcal: d.kcal, protein: d.protein, days: 1, meals: d.meals }));
   }
 
-  const keyOf = (iso) => {
-    if (grain === 'month') return `${iso.slice(0, 7)}-01`;
-    // Monday of that ISO week, computed on a UTC date so a DST shift cannot
-    // move a day into the neighbouring bucket.
-    const d = new Date(`${iso}T00:00:00Z`);
-    d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
-    return d.toISOString().slice(0, 10);
-  };
+  // Weeks key on their Monday, computed on a UTC date so a DST shift cannot
+  // move a day into the neighbouring bucket.
+  const keyOf = (iso) => (grain === 'month' ? `${iso.slice(0, 7)}-01` : startOfWeek(iso));
 
   const buckets = new Map();
   for (const day of days) {

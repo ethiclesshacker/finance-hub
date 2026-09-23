@@ -6,6 +6,7 @@
 //   node ledger/cli.js ingest     [--account KEY] [--dry-run] [--backfill-days 30] [--limit N]
 //   node ledger/cli.js summarize  [--period day|week|month] [--date YYYY-MM-DD]
 //   node ledger/cli.js tool NAME  '{"json":"args"}'
+//   node ledger/cli.js tools-manifest   (the tools as a JSON-Schema function list)
 //   node ledger/cli.js users
 //   node ledger/cli.js purge      [--days 90]
 //   node ledger/cli.js reset      --yes   (deletes every event and source)
@@ -74,6 +75,13 @@ const COMMANDS = {
     }
     const payload = args._[1] ? JSON.parse(args._[1]) : {};
     console.log(JSON.stringify(await runTool(name, payload), null, 2));
+  },
+
+  // The function-calling manifest, generated rather than hand-kept: a tool
+  // added to tools.js is in docs/hermes-tools.json the next time this runs.
+  async 'tools-manifest'() {
+    const { TOOL_SPECS } = await import('./tools.js');
+    console.log(JSON.stringify(TOOL_SPECS, null, 2));
   },
 
   async reset() {
@@ -228,12 +236,13 @@ const COMMANDS = {
   },
 
   async purge() {
-    const { db, resolveUserId } = await import('./db.js');
-    const { data, error } = await db().rpc('ledger_purge_snippets', {
+    const { rpc, resolveUserId } = await import('./db.js');
+    const r = await rpc('ledger_purge_snippets', {
       p_days: args.days ?? null, p_user_id: await resolveUserId(),
     });
-    if (error) throw error;
-    console.log(`Purged cached body text from ${data} source rows.`);
+    console.log(
+      `Purged cached body text from ${r.snippets_cleared} source rows older than ${r.retention_days} days; ` +
+      `marked ${r.runs_failed} stuck runs failed, deleted ${r.runs_deleted} empty runs.`);
   },
 };
 

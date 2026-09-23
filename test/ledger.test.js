@@ -13,6 +13,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
   normalizeName, canonicalMerchant, parseAmounts, pickTotalAmount,
@@ -44,6 +45,29 @@ test('normalizeName strips punctuation, case and corporate suffixes', () => {
   assert.equal(normalizeName(null), null);
 });
 
+test('normalizeName and its SQL twin strip the same corporate suffixes', () => {
+  // ledger_normalize_name produces entities.normalized_name; this produces
+  // what ledger_find_duplicate is asked to match against. If the two lists
+  // ever differ, one merchant becomes two entities and nobody is told.
+  const sql = readFileSync(new URL('../supabase/migrations/0004_ledger_api.sql', import.meta.url), 'utf8');
+  const fn = sql.slice(sql.indexOf('function public.ledger_normalize_name'));
+  const suffixes = fn.match(/\\s\+\((\w+(?:\|\w+)+)\)\\s\*\$/)?.[1];
+  assert.ok(suffixes, 'could not find the suffix alternation in ledger_normalize_name');
+
+  const js = readFileSync(new URL('../src/ledger/normalize.js', import.meta.url), 'utf8');
+  const jsSuffixes = js.match(/CORPORATE_SUFFIX = \/\\s\+\((\w+(?:\|\w+)+)\)\\s\*\$\/g/)?.[1];
+  assert.equal(jsSuffixes, suffixes);
+
+  // And the same character class before it: anything not [a-z0-9] is a space.
+  assert.match(fn, /\[\^a-z0-9\]\+/);
+  for (const word of suffixes.split('|')) {
+    assert.equal(normalizeName(`Acme ${word}`), 'acme', word);
+    assert.equal(normalizeName(`Acme ${word.toUpperCase()} ${word}`), 'acme', word);
+  }
+  // A word the list does not name stays, on both sides.
+  assert.equal(normalizeName('Acme LLP'), 'acme llp');
+});
+
 test('canonicalMerchant collapses aliases and keeps unknown names', () => {
   assert.equal(canonicalMerchant('AMAZON.IN').name, 'Amazon');
   assert.equal(canonicalMerchant('AMAZON PAY INDIA PRIVATE LIMITED').name, 'Amazon');
@@ -52,6 +76,24 @@ test('canonicalMerchant collapses aliases and keeps unknown names', () => {
   assert.equal(canonicalMerchant('Nagarjuna Restaurant').name, 'Nagarjuna Restaurant');
   assert.equal(canonicalMerchant('Amazon.in').normalized_name, 'amazon');
   assert.equal(canonicalMerchant(''), null);
+});
+
+test('the bank\'s name for a merchant and the receipt\'s name are one entity', () => {
+  // Each of these was double-counted: the card alert named the company, the
+  // receipt named the brand, and the deduplicator saw two merchants.
+  const pairs = [
+    ['ORBGEN TECHNOLOGIES PVT LTD', 'District'],
+    ['MYJIO', 'Jio'],
+    ['BUNDL TECHNOLOGIES PRIVATE LIMITED', 'Swiggy'],
+    ['Tata 1Mg Healthca', 'Tata 1mg'],
+    ['TATA 1MG HEALTHCARE', 'Tata 1mg'],
+  ];
+  for (const [statement, receipt] of pairs) {
+    assert.equal(canonicalMerchant(statement).name, receipt, statement);
+    assert.equal(canonicalMerchant(statement).normalized_name, canonicalMerchant(receipt).normalized_name, statement);
+  }
+  // The new tokens must not swallow neighbours.
+  assert.equal(canonicalMerchant('RSP*DISTRICT DINING RZ').name, 'District Dining');
 });
 
 test('canonicalMerchant does not match an alias inside a longer word', () => {
@@ -258,6 +300,65 @@ test('one merchant receipt produces one event, not one per rule', () => {
   assert.equal(result.extractions.length, 1);
   assert.equal(result.extractions[0].type, 'food');
   assert.equal(result.extractions[0].data.amount, 97.21);
+});
+
+test('a payment line inside a receipt does not become a second event', () => {
+  // The merchant's own rule knows what was bought; the payment rule only
+  // knows who was paid. Both matched at tier 1, so one dinner and one ride
+  // were each recorded twice.
+  const zomato = extractDeterministic({
+    subject: 'Your Zomato order from Happiness Dhaba',
+    date: new Date('2026-08-11T07:46:00Z'), from: { address: 'noreply@zomato.com' }, to,
+    text: 'Order ID: 8457098261 from Happiness Dhaba has been delivered. '
+        + 'Your payment of ₹97.21 to Happiness Dhaba is successful.',
+  }, SELF);
+  assert.equal(zomato.extractions.length, 1, zomato.extractions.map(e => e.extracted_by).join(','));
+  assert.equal(zomato.extractions[0].type, 'food');
+
+  const uber = extractDeterministic({
+    subject: 'Your Tuesday evening trip with Uber',
+    date: new Date('2026-08-11T14:10:00Z'), from: { address: 'noreply@uber.com' }, to,
+    text: 'Thanks for riding. Payment of ₹149.00 to Uber India Systems. Total ₹149.00',
+  }, SELF);
+  assert.equal(uber.extractions.length, 1, uber.extractions.map(e => e.extracted_by).join(','));
+  assert.equal(uber.extractions[0].type, 'travel');
+  assert.equal(uber.extractions[0].data.amount, 149);
+
+  // A payment line with no merchant receipt around it is still an event.
+  const bare = extractDeterministic({
+    subject: 'Payment successful',
+    date: new Date('2026-08-11T14:10:00Z'), from: { address: 'no-reply@amazonpay.in' }, to,
+    text: 'Your payment of ₹ 20.0 to Smartworks Tech Solutions is successful. Transaction ID: P1234567890',
+  }, SELF);
+  assert.equal(bare.extractions.length, 1);
+  assert.equal(bare.extractions[0].extracted_by, 'rules:upi_payment');
+});
+
+test('an Amazon dispatch mail is one parcel, not one per rule', () => {
+  // The generic shipment rule and the Amazon rule both read "dispatched" in
+  // the subject. Only the Amazon one carries the order number that keys the
+  // parcel to its purchase.
+  const result = extractDeterministic({
+    subject: 'Your Amazon.in order has been dispatched',
+    date: new Date('2026-08-12T09:00:00Z'), from: { address: 'shipment-tracking@amazon.in' }, to,
+    text: 'Order # 403-1234567-1234567 has been dispatched and will arrive tomorrow.',
+  }, SELF);
+  assert.equal(result.extractions.length, 1, result.extractions.map(e => e.extracted_by).join(','));
+  assert.equal(result.extractions[0].extracted_by, 'rules:amazon_order');
+  assert.equal(result.extractions[0].dedupe_key, 'parcel:amazon:403-1234567-1234567');
+});
+
+test('a subject triage rules out never reaches the rules', () => {
+  // "Rate your order from X" carries the order number and the amount of a
+  // meal already recorded; the food rule reads it as a second dinner.
+  const result = extractDeterministic({
+    subject: 'Rate your order from Happiness Dhaba',
+    date: new Date('2026-08-11T10:00:00Z'), from: { address: 'noreply@zomato.com' }, to,
+    text: 'How was your order from Happiness Dhaba? Order ID: 8457098261. Total paid ₹97.21',
+  }, SELF);
+  assert.equal(result.decision, 'reject');
+  assert.equal(result.reason, 'never-an-event subject');
+  assert.equal(result.extractions.length, 0);
 });
 
 test('a promotional email never reaches the regex rules', () => {

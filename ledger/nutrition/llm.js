@@ -133,15 +133,18 @@ const impliedKcal = (r) =>
  * for a whole thali, or macros that do not add up to the calories beside them.
  * Both are cheap to catch here and expensive to notice later in a yearly total.
  */
-function validate(row, name) {
+export function validate(row) {
   if (row.is_food === false) return { ok: false, reason: 'model says not food' };
 
-  const kcal = Number(row.kcal);
   // Zero is a legitimate answer, not a missing one. Coke Zero, black coffee and
   // sugar-free soda are exactly the items this feature must get right, and an
   // earlier version of this check rejected all of them as "no kcal" — which
   // sent them to the unresolved pile, where they read as unknown rather than
-  // as the nothing they actually are.
+  // as the nothing they actually are. Null is the opposite case: the schema
+  // lets the model leave kcal empty, and Number(null) is 0, so without this
+  // line a dish the model could not price was written as a calorie-free one.
+  if (row.kcal === null || row.kcal === undefined) return { ok: false, reason: 'no kcal' };
+  const kcal = Number(row.kcal);
   if (!Number.isFinite(kcal) || kcal < 0) return { ok: false, reason: 'no kcal' };
   if (kcal > 4000) return { ok: false, reason: `${kcal} kcal for one serving is not credible` };
 
@@ -201,6 +204,7 @@ export async function estimateBatch(names) {
 
   const result = await chat({
     job: 'nutrition',
+    json: true,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: `Estimate one serving as sold for each dish:\n\n${listing}${grounding}` },
@@ -209,13 +213,7 @@ export async function estimateBatch(names) {
   });
 
   if (!result.ok) return { ok: false, error: result.error, rows: new Map(), rejected: [], usage: result.usage };
-
-  let parsed;
-  try {
-    parsed = JSON.parse(result.content);
-  } catch {
-    return { ok: false, error: 'model returned unparseable JSON', rows: new Map(), rejected: [], usage: result.usage };
-  }
+  const parsed = result.content;
 
   const rows = new Map();
   const rejected = [];
@@ -224,7 +222,7 @@ export async function estimateBatch(names) {
     const name = names[Number(r.index) - 1];
     if (!name) continue;
 
-    const verdict = validate(r, name);
+    const verdict = validate(r);
     if (!verdict.ok) {
       rejected.push({ name, reason: verdict.reason });
       continue;

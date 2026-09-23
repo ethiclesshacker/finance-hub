@@ -14,6 +14,7 @@ import { curatedLookup, isNonFood, looksPackaged } from '../ledger/nutrition/cur
 import { judge, gramsFromName } from '../ledger/nutrition/databases.js';
 import { sameDish } from '../ledger/nutrition/reference.js';
 import { loadINDB, retrieveINDB, matchINDB } from '../ledger/nutrition/indb.js';
+import { validate } from '../ledger/nutrition/llm.js';
 
 const dict = indexDictionary([
   { display_name: 'Cheese Masala Dosa', normalized_name: 'cheese masala dosa',
@@ -283,6 +284,43 @@ test('a stated count still takes macros from the dictionary when it knows the di
   const n = eventNutrition(meal([{ name: 'Cheese Masala Dosa', kcal: 700 }]), dict);
   assert.equal(n.kcal, 700);        // stated calories win
   assert.equal(n.protein, 16);      // macros still from the dictionary row
+});
+
+// ── the model's answers ──────────────────────────────────
+//
+// The gate on a returned row. Each rejection below is a shape the model has
+// actually produced: per-100g for a whole thali, macros that do not add up,
+// a soft drink with sugar's macros and zero calories.
+
+test('a sound estimate passes the gate', () => {
+  assert.deepEqual(validate({ is_food: true, kcal: 640, protein_g: 20, carbs_g: 80, fat_g: 26, portion_g: 500 }), { ok: true });
+});
+
+test('zero calories is an answer, not a missing one', () => {
+  assert.equal(validate({ is_food: true, kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, portion_g: 300 }).ok, true);
+  // ...unless the macros say otherwise.
+  const v = validate({ is_food: true, kcal: 0, protein_g: 0, carbs_g: 35, fat_g: 0, portion_g: 300 });
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /macros imply/);
+});
+
+test('not food, no kcal, no portion and impossible density are each rejected with a reason', () => {
+  assert.match(validate({ is_food: false }).reason, /not food/);
+  assert.match(validate({ is_food: true, kcal: null, portion_g: 100 }).reason, /no kcal/);
+  assert.match(validate({ is_food: true, kcal: -5, portion_g: 100 }).reason, /no kcal/);
+  assert.match(validate({ is_food: true, kcal: 600, portion_g: null }).reason, /no portion/);
+  assert.match(validate({ is_food: true, kcal: 5000, portion_g: 800 }).reason, /not credible/);
+  // 640 kcal in 50 g is 1280 kcal/100g — more than pure fat.
+  assert.match(validate({ is_food: true, kcal: 640, portion_g: 50 }).reason, /exceeds what food can be/);
+});
+
+test('macros and calories have to tell the same story', () => {
+  // 20 g protein + 80 g carbs + 26 g fat imply 634 kcal; claiming 300 is a third out.
+  const v = validate({ is_food: true, kcal: 300, protein_g: 20, carbs_g: 80, fat_g: 26, portion_g: 500 });
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /macros imply 634/);
+  // Within a third is fine — fibre and rounding make exact agreement unrealistic.
+  assert.equal(validate({ is_food: true, kcal: 520, protein_g: 20, carbs_g: 80, fat_g: 26, portion_g: 500 }).ok, true);
 });
 
 // ── the INDB rung ────────────────────────────────────────

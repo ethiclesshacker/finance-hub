@@ -438,7 +438,7 @@
     "type": "function",
     "function": {
       "name": "log_measurement",
-      "description": "Record a body measurement — weight, waist, body fat. Use when the user states a reading: \"88.4 this morning\", \"waist is 96cm\". One reading per metric per day: telling it again the same day corrects the earlier value instead of duplicating it, so the user can re-weigh freely. Weight is the one that matters most here — it is the feedback loop for the daily calorie target — so when the user mentions weight in passing, offer to log it.",
+      "description": "Record a body measurement — weight, waist, body fat. Use when the user states a reading: \"88.4 this morning\", \"waist is 96cm\". One reading per metric per day: telling it again the same day corrects the earlier value instead of duplicating it, so the user can re-weigh freely. Weight is the one that matters most here — it is the feedback loop for the daily calorie target — so when the user mentions weight in passing, offer to log it. This is THE place weight is written; get_day and get_health_overview read it back alongside any reading from Apple Health.",
       "parameters": {
         "type": "object",
         "required": [
@@ -481,7 +481,7 @@
     "type": "function",
     "function": {
       "name": "log_activity",
-      "description": "Record exercise or physical activity: a workout, a run, a walk, a sport. Use when the user says they did something physical — \"went to the gym\", \"ran 5k\", \"played badminton for an hour\". Facts the user stated (what, how long, how far) land as facts; any estimated calorie burn is stored as inference, clearly separated, because the user said what they did, not what it burned.",
+      "description": "Record exercise or physical activity: a workout, a run, a walk, a sport. Use when the user says they did something physical — \"went to the gym\", \"ran 5k\", \"played badminton for an hour\". Facts the user stated (what, how long, how far) land as facts; any estimated calorie burn is stored as inference, clearly separated, because the user said what they did, not what it burned. His Apple Watch records walks, runs and gym sessions by itself and they arrive when his phone syncs — so this is for what the Watch did NOT capture: a sport played without it, a session he forgot to start, a comment worth keeping (\"knee hurt after 2 km\"). If unsure whether the Watch has it, log it anyway: a telling that matches a Watch workout is folded into it, never counted twice.",
       "parameters": {
         "type": "object",
         "required": [
@@ -658,6 +658,180 @@
             "description": "today, yesterday, this week, last week, this month, last month, this year, \"last N days\", a single YYYY-MM-DD, or an explicit span \"YYYY-MM-DD..YYYY-MM-DD\"."
           }
         }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_day",
+      "description": "Everything about a day, or each day in a range, in one object: money spent and received, calories and protein eaten, steps, sleep, heart, weight, calories burned, the energy balance against the calorie target, and workouts. START HERE for \"how was my day\", \"how was my week\", \"am I in a deficit\", or anything that crosses money, food and body. money.spend is everything; when part of it was work (card spends he has marked as work, reimbursable) the day also carries money.work_spend and money.personal_spend — judge his spending on personal_spend, and mention work separately. energy.balance_kcal is eaten minus burned (negative is a deficit). Eaten comes from receipts and what he told you, so it is a floor: when energy.complete is false say the balance is provisional. That happens for today, when food.meals_unpriced > 0, and when energy.eaten_looks_partial is set (under 60% of target — almost always a meal he did not log, so ask what he ate rather than congratulating him on the deficit). Up to 120 days; for longer body-only trends use get_health_overview.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "date_range": {
+            "type": "string",
+            "description": "today, yesterday, this week, last week, this month, last month, this year, \"last N days\", a single YYYY-MM-DD, or an explicit span \"YYYY-MM-DD..YYYY-MM-DD\".",
+            "default": "today"
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_net_worth",
+      "description": "Net worth from the snapshots he records: the latest figure with its asset breakdown (stocks, mutual funds, cash, EPF, gold, FDs) and liabilities, the change since the previous snapshot, and recent history. In INR. Snapshots are entered by hand every week or two, so always say the date of the latest one.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "history": {
+            "type": "integer",
+            "default": 12,
+            "description": "How many recent snapshots to include."
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_card_points",
+      "description": "Credit card reward points (HSBC TravelOne): current balance, lifetime accrued and redeemed, and for a period the spend, points earned, points per ₹100, a month-by-month split, top merchants and past redemptions. The balance is always lifetime; date_range only scopes the period figures. For what was bought, use search_events — this is the points view. Rows are now created automatically from card alerts: `assumed` counts rows whose label and multiplier were inferred from earlier spends at the same merchant and that he has not confirmed yet, so say the balance includes that many assumed points. range.work_spend is the part of the period spend he has marked as work. top_merchants are real merchants now, work or not.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "date_range": {
+            "type": "string",
+            "description": "today, yesterday, this week, last week, this month, last month, this year, \"last N days\", a single YYYY-MM-DD, or an explicit span \"YYYY-MM-DD..YYYY-MM-DD\"."
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_targets",
+      "description": "His own targets and assumptions: daily calorie target, monthly income and baseline expenses, FI multiplier and the FI target it implies, expected return, retirement age, emergency runway, card reward targets. Each value says whether HE set it (set_by: user) or it is the app default (set_by: default) — treat a default as a placeholder, not as his goal. Call this before judging any number against \"his target\".",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_health_overview",
+      "description": "Apple Health, one row per day: steps, active and resting calories burned, distance, exercise minutes, sleep hours with bed and wake times, resting heart rate, heart rate min/avg/max, HRV, weight, workouts. START HERE for any question about activity, sleep, fitness, heart or weight. Days with no data still appear, as just a date.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "date_range": {
+            "type": "string",
+            "description": "today, yesterday, this week, last week, this month, last month, this year, \"last N days\", a single YYYY-MM-DD, or an explicit span \"YYYY-MM-DD..YYYY-MM-DD\".",
+            "default": "last 7 days"
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_health_metric",
+      "description": "One Apple Health metric across days, for anything the overview does not carry or when only one number is wanted. Totals per day for cumulative types (step_count, active_energy, water, dietary_*); min/avg/max/latest per day for readings (heart_rate, hrv_sdnn, body_mass, oxygen_saturation). Call list_health_metrics for the exact type names that have data.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "HealthKit type in snake_case, e.g. step_count, heart_rate, body_mass."
+          },
+          "date_range": {
+            "type": "string",
+            "description": "today, yesterday, this week, last week, this month, last month, this year, \"last N days\", a single YYYY-MM-DD, or an explicit span \"YYYY-MM-DD..YYYY-MM-DD\".",
+            "default": "last 7 days"
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_health_day_detail",
+      "description": "One Apple Health metric across the hours of a single day — when were the steps walked, what did heart rate do overnight. Buckets for a cumulative type add up to that day's total.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string",
+            "description": "YYYY-MM-DD, today or yesterday. Defaults to today."
+          },
+          "bucket_minutes": {
+            "type": "integer",
+            "default": 60,
+            "description": "5 to 360."
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_sleep",
+      "description": "Sleep per night with stages: hours asleep, fell-asleep and wake times, minutes of core, deep, REM and awake, time in bed. A night is dated by the morning it ended. Overlapping records are merged, and time in bed is not counted as sleep.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "date_range": {
+            "type": "string",
+            "description": "today, yesterday, this week, last week, this month, last month, this year, \"last N days\", a single YYYY-MM-DD, or an explicit span \"YYYY-MM-DD..YYYY-MM-DD\".",
+            "default": "last 7 days"
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_workouts",
+      "description": "Workouts and physical activity: everything the Apple Watch recorded, plus anything he told you that the Watch did not. Each item says its source (watch or ledger). When he described a workout the Watch also recorded, it appears ONCE, as the Watch measured it, with his words in `note`. Check here before log_activity.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "date_range": {
+            "type": "string",
+            "description": "today, yesterday, this week, last week, this month, last month, this year, \"last N days\", a single YYYY-MM-DD, or an explicit span \"YYYY-MM-DD..YYYY-MM-DD\".",
+            "default": "last 30 days"
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "list_health_metrics",
+      "description": "Which Apple Health types have been synced, with row counts, date span, and when the phone last synced. Use it to tell \"no data that day\" from \"that metric is not being synced\", and to find exact type names.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
       }
     }
   },

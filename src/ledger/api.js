@@ -10,12 +10,7 @@
 // ======================================================
 
 import { supabase } from '../supabase.js';
-
-async function rpc(fn, args = {}) {
-  const { data, error } = await supabase.rpc(fn, args);
-  if (error) throw new Error(error.message);
-  return data;
-}
+import { rpc, unwrap } from '../rpc.js';
 
 export function searchEvents({
   query = null, types = null, subtypes = null, statuses = null, sourceTypes = null,
@@ -44,7 +39,6 @@ export const reviewQueue         = (limit = 50)  => rpc('ledger_review_queue', {
 export const getDailySummary     = date          => rpc('ledger_get_daily_summary', { p_date: date });
 export const stats               = (from, to)    => rpc('ledger_stats', { p_from: from, p_to: to });
 export const exportLedger        = (from, to)    => rpc('ledger_export', { p_from: from, p_to: to });
-export const searchEntities      = (q, type)     => rpc('ledger_search_entities', { p_query: q || null, p_type: type || null, p_limit: 25 });
 
 export function createEvent(event, entities = [], { allowMerge = true, sourceType = 'manual' } = {}) {
   return rpc('ledger_create_event', {
@@ -55,14 +49,6 @@ export function createEvent(event, entities = [], { allowMerge = true, sourceTyp
 
 export function updateEvent(id, changes, { replaceData = false } = {}) {
   return rpc('ledger_update_event', { p_event_id: id, p_changes: changes, p_replace_data: replaceData });
-}
-
-/** Types the ledger has actually seen, for the filter dropdown. */
-export async function listEventTypes() {
-  const { data, error } = await supabase
-    .from('ledger_event_types').select('type, label, icon').order('label');
-  if (error) throw new Error(error.message);
-  return data || [];
 }
 
 /**
@@ -79,8 +65,7 @@ export async function dailySummaries(fromDate, toDate) {
   if (fromDate) query = query.gte('date', fromDate);
   if (toDate) query = query.lte('date', toDate);
 
-  const { data, error } = await query;
-  if (error) throw new Error(error.message);
+  const data = await unwrap(query);
   return Object.fromEntries((data || []).map(row => [row.date, row]));
 }
 
@@ -94,19 +79,15 @@ export async function dailySummaries(fromDate, toDate) {
 
 /** Every resolved dish, for the client-side rollup in src/ledger/nutrition.js. */
 export async function foodDictionary() {
-  const { data, error } = await supabase
+  const data = await unwrap(supabase
     .from('food_items')
     .select('normalized_name, display_name, kcal, protein_g, carbs_g, fat_g, portion_g, category, source, confidence, verified')
-    .not('kcal', 'is', null);
-  if (error) throw new Error(error.message);
+    .not('kcal', 'is', null));
   return data || [];
 }
 
-/** How much of the ledger the dictionary can answer. Shown beside any total. */
-export const foodCoverage = () => rpc('food_coverage', {});
-
 /** Correct one dish by hand. Writes source 'manual', which outranks the resolver. */
-export const setFoodItem = payload => rpc('food_upsert_item', { p_user_id: null, p_payload: payload });
+const setFoodItem = payload => rpc('food_upsert_item', { p_user_id: null, p_payload: payload });
 
 // The Dishes page edits the dictionary directly. The upsert function is the
 // resolver's door — it is rank-guarded and refuses to touch a verified row —
@@ -117,8 +98,7 @@ const DICT_COLUMNS = 'id, normalized_name, display_name, kcal, protein_g, carbs_
 
 /** Every dish, priced or not, for the Dishes page. */
 export async function foodDictionaryAll() {
-  const { data, error } = await supabase.from('food_items').select(DICT_COLUMNS).order('display_name');
-  if (error) throw new Error(error.message);
+  const data = await unwrap(supabase.from('food_items').select(DICT_COLUMNS).order('display_name'));
   return data || [];
 }
 
@@ -131,9 +111,7 @@ export async function updateFoodItem(id, fields) {
     ...fields, source: 'manual', confidence: 1, verified: true,
     source_ref: { entered_by: 'human', via: 'dishes page', at: new Date().toISOString() },
   };
-  const { data, error } = await supabase.from('food_items').update(patch).eq('id', id).select(DICT_COLUMNS).single();
-  if (error) throw new Error(error.message);
-  return data;
+  return unwrap(supabase.from('food_items').update(patch).eq('id', id).select(DICT_COLUMNS).single());
 }
 
 /** Forget the numbers and let the resolver estimate the dish again. */
@@ -143,9 +121,7 @@ export async function resetFoodItem(id) {
     source: 'llm', confidence: null, verified: false,
     source_ref: { reset_by: 'human', via: 'dishes page', at: new Date().toISOString() },
   };
-  const { data, error } = await supabase.from('food_items').update(patch).eq('id', id).select(DICT_COLUMNS).single();
-  if (error) throw new Error(error.message);
-  return data;
+  return unwrap(supabase.from('food_items').update(patch).eq('id', id).select(DICT_COLUMNS).single());
 }
 
 /**
@@ -165,18 +141,15 @@ export async function createFoodItem(fields) {
   if (res.action === 'kept_verified' || res.action === 'kept_stronger') {
     throw new Error('That dish already exists — edit it in the list instead.');
   }
-  const { data, error } = await supabase.from('food_items').update({ verified: true }).eq('id', res.id).select(DICT_COLUMNS).single();
-  if (error) throw new Error(error.message);
-  return data;
+  return unwrap(supabase.from('food_items').update({ verified: true }).eq('id', res.id).select(DICT_COLUMNS).single());
 }
 
 /** The last few ingestion runs — the "is this thing on?" indicator. */
 export async function recentRuns(limit = 5) {
-  const { data, error } = await supabase
+  const data = await unwrap(supabase
     .from('ingestion_runs')
     .select('source_type, account_key, started_at, completed_at, status, items_seen, events_created, events_updated, errors')
     .order('started_at', { ascending: false })
-    .limit(limit);
-  if (error) throw new Error(error.message);
+    .limit(limit));
   return data || [];
 }

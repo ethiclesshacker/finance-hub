@@ -62,7 +62,12 @@ export async function resolveUserId() {
     users.map(u => `  ${u.id}  ${u.email}`).join('\n'));
 }
 
-async function rpc(fn, args) {
+/**
+ * One SQL function call. Every caller in the jobs goes through here, so an
+ * error always reads the same way: the function's name, then Postgres's
+ * message, then its hint when there is one.
+ */
+export async function rpc(fn, args) {
   const { data, error } = await db().rpc(fn, args);
   if (error) throw new Error(`${fn}: ${error.message}${error.hint ? ` (${error.hint})` : ''}`);
   return data;
@@ -73,12 +78,18 @@ export function ingestEvent(userId, payload) {
   return rpc('ledger_ingest_event', { p_user_id: userId, p_payload: payload });
 }
 
-export function searchEvents(userId, filters = {}) {
-  return rpc('ledger_search_events', { ...filters, p_user_id: userId });
-}
+// ledger_search_events takes fourteen arguments and PostgREST wants every one
+// of them named, so each caller used to spell all fourteen out. The defaults
+// live here; a caller passes only what it means.
+const SEARCH_DEFAULTS = {
+  p_query: null, p_types: null, p_subtypes: null, p_statuses: null, p_source_types: null,
+  p_entity_id: null, p_entity_name: null, p_from: null, p_to: null, p_min_confidence: null,
+  p_limit: 100, p_offset: 0, p_ascending: false,
+};
 
-export function stats(userId, from, to) {
-  return rpc('ledger_stats', { p_from: from, p_to: to, p_user_id: userId });
+/** Search a user's events. `overrides` are the p_-prefixed SQL arguments. */
+export function searchEvents(userId, overrides = {}) {
+  return rpc('ledger_search_events', { ...SEARCH_DEFAULTS, ...overrides, p_user_id: userId });
 }
 
 export function getDailySummary(userId, date) {
@@ -140,11 +151,7 @@ export function fingerprintStats(userId, days = 90) {
  * what makes a correction stick without a rule being written for it.
  */
 export async function foodMerchants(userId, limit = 500) {
-  const result = await rpc('ledger_search_events', {
-    p_query: null, p_types: ['food'], p_subtypes: null, p_statuses: null, p_source_types: null,
-    p_entity_id: null, p_entity_name: null, p_from: null, p_to: null, p_min_confidence: null,
-    p_limit: limit, p_offset: 0, p_ascending: false, p_user_id: userId,
-  });
+  const result = await searchEvents(userId, { p_types: ['food'], p_limit: limit });
 
   const names = new Set();
   for (const event of result?.events || []) {

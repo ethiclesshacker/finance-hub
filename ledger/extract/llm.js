@@ -21,6 +21,7 @@ import { config } from '../config.js';
 import { chat } from './openai.js';
 import { isSelfPayee, prepareForLLM, withKeys } from '../../src/ledger/email.js';
 import { canonicalMerchant, entityRef } from '../../src/ledger/normalize.js';
+import { localClock } from '../../src/ledger/dates.js';
 
 const SYSTEM_PROMPT = `You extract real-world life events from transactional email.
 
@@ -99,8 +100,9 @@ export async function extractWithLLM(messages, options = {}) {
   const numbered = messages.map((message, i) =>
     `--- EMAIL ${i} ---\n${prepareForLLM(message, options.textLimit ?? 1500)}`).join('\n\n');
 
-  const { ok, content, usage, error } = await chat({
+  const { ok, content: parsed, usage, error } = await chat({
     job: 'ingest:extract',
+    json: true,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content:
@@ -114,13 +116,6 @@ export async function extractWithLLM(messages, options = {}) {
   });
 
   if (!ok) return { results: new Map(), calls: 1, error };
-
-  let parsed;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    return { results: new Map(), calls: 1, error: 'completion was not valid JSON' };
-  }
 
   const results = new Map();
   for (const result of parsed.results || []) {
@@ -228,11 +223,8 @@ export function slugSubtype(value) {
 }
 
 export function isLocalMidnight(iso, timeZone) {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone, hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
-  }).formatToParts(new Date(iso));
-  const at = Object.fromEntries(parts.map(p => [p.type, p.value]));
-  return `${at.hour}:${at.minute}:${at.second}` === '00:00:00';
+  const { hour, minute, second } = localClock(iso, timeZone);
+  return hour === 0 && minute === 0 && second === 0;
 }
 
 function safeDate(value) {

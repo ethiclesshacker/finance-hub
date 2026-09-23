@@ -35,7 +35,6 @@ every question it answers is still a SQL function away.
 | `event_entities` | Which entities an event involves, and how. |
 | `event_relations` | Distinct-but-connected events (a trip and its hotel booking). |
 | `daily_summaries` / `period_summaries` | Derived write-ups. Regenerable. |
-| `derived_insights` | Model observations *about* the ledger, kept apart from it. |
 | `ingestion_runs` / `ingestion_checkpoints` | Observability, and where to resume. |
 | `ledger_audit_log` | Append-only record of deletions, dismissals and edits. |
 
@@ -105,6 +104,10 @@ Two mechanisms keep it there:
 - **Rule tiers.** A Zomato receipt says both "your order from X" and "paid by
   card", so the food rule and the payment rule both match. Only the most
   specific tier that matched is kept — otherwise one email becomes two events.
+  Three tiers: the merchant's own receipt (1), a payment line that names the
+  payee (1.5), a bare card alert (2). And a subject triage has ruled out
+  outright — "payment failed", "rate your order" — never reaches the rules at
+  all, however much of a receipt it quotes.
 - **The fingerprint cache.** `sender + digit-masked subject shape`. A shape seen
   three times that has never produced an event stops being sent to the model.
   It only ever suppresses negatives, so it cannot hide an event a rule would
@@ -399,7 +402,13 @@ knowing before changing the extraction code.
   Rules now require the *shape* — an amount and a verb, adjacent.
 - **One email tells one story.** A Zomato receipt says both "your order from X"
   and "paid by card". Rules are tiered, and only the most specific tier that
-  matched is kept, or one dinner becomes two events.
+  matched is kept, or one dinner becomes two events. The payment rule sat at
+  the same tier as the merchants' for a while, and every Zomato dinner, every
+  Uber ride and every Amazon parcel was recorded twice.
+- **The bank's name for a merchant is not the receipt's.** Orbgen Technologies
+  is District, Bundl Technologies is Swiggy, MYJIO is Jio. The alias table in
+  `normalize.js` is what lets the card alert and the receipt agree on a name,
+  and a spend shows up twice until it does.
 - **An order number is not an event id.** The purchase, the parcel shipped
   against it and the refund reversing it all carry the same number. Keys are
   namespaced by event kind (`order:` / `parcel:` / `refund:`), otherwise the
@@ -536,7 +545,7 @@ Every caller — browser, jobs, Hermes — goes through the same SQL functions.
 | `ledger_stats(from, to)` | Aggregates, computed at call time, never stored. |
 | `ledger_search_entities` / `ledger_get_entity` / `ledger_search_entity_events` | "What have I bought from Amazon?" |
 | `ledger_export(from, to)` | Everything, as JSON. |
-| `ledger_purge_snippets(days)` | Drop cached body text, keep the pointer. |
+| `ledger_purge_snippets(days)` | Drop cached body text, keep the pointer; close stuck runs, drop empty ones. Runs nightly after the summary. |
 | `food_upsert_item(user_id, payload)` | The single write path for a dish. Rank-guarded; never demotes. |
 | `food_match_item(name, threshold)` | The reference engine's candidate list. Judgement stays in JS. |
 | `food_pending_items(limit)` | Dish names with no nutrition, most-eaten first. |
@@ -562,6 +571,8 @@ Registered in `~/.hermes/config.yaml` under `mcp_servers.ledger`; the tools
 appear as `mcp__ledger__log_meal` and so on. `ledger/mcp.js` is a thin
 adapter over `TOOLS` in `ledger/tools.js`: write tools return a receipt (the
 event minus its sources and audit trail), read tools return the data as is.
+Which is which comes from `readOnly: true` on each tool's spec — there is no
+second list to keep in step, and the MCP annotations follow it.
 
 The CLI form still exists for a person at a terminal:
 
@@ -659,9 +670,17 @@ not an error.
 in a shop is not eating it, and a tool that quietly adds 500 kcal to today
 because someone was curious about a label would be worse than no tool.
 
-`docs/hermes-tools.json` is the same set in JSON-Schema function-calling form.
+`docs/hermes-tools.json` is the same set in JSON-Schema function-calling form,
+and it is generated, not hand-kept:
+
+```bash
+npm run -s ledger:tools-manifest > docs/hermes-tools.json
+```
+
 Date ranges accept ISO dates, `{from,to}`, or phrases like `"last 30 days"`,
-`"this month"`, `"yesterday"`.
+`"this month"`, `"yesterday"`. `get_nutrition` rolls meals up with the same
+`summarise()` the Food screen uses, so the number Hermes quotes and the number
+on the screen cannot disagree.
 
 A hosted Hermes can skip this layer and POST to
 `/rest/v1/rpc/ledger_search_events` with the user's JWT — same functions, same
@@ -678,8 +697,8 @@ rules, RLS enforcing ownership.
 - The service-role key lives only in `.env.ledger` on your machine. It is not
   `VITE_`-prefixed, so Vite cannot inline it into the browser bundle.
 - Sources store a **pointer** — mailbox, folder, UID, message-id — plus a
-  300-character snippet for debugging that `ledger_purge_snippets()` removes on
-  a schedule. Full bodies are never stored.
+  300-character snippet for debugging that `ledger_purge_snippets()` removes.
+  The purge runs daily, after the summary job. Full bodies are never stored.
 - `anon` has no grant on any ledger table; RLS scopes every row to its owner.
 - The audit log has no INSERT/UPDATE/DELETE policy, so a user session cannot
   rewrite its own history. Only `SECURITY DEFINER` triggers append to it.
@@ -697,9 +716,14 @@ npm run ledger:ingest -- --backfill-days 30    # rescan a window, ignoring the c
 npm run ledger:summarize -- --period day       # or week / month
 npm run ledger:costs -- --days 30              # what the model has cost
 npm run ledger:tool -- get_review_queue '{}'
-node ledger/cli.js models --filter 5.6         # what OPENAI_MODEL can be set to
-node ledger/cli.js purge --days 90             # drop old cached snippets
+npm run ledger:models -- --filter 5.6          # what OPENAI_MODEL can be set to
+npm run ledger:purge -- --days 90              # drop old cached snippets
+npm run ledger:tools-manifest                  # the tools as a function-calling manifest
+npm run ledger:reset -- --yes                  # delete every event and source; asks first without --yes
 ```
+
+Always through the npm scripts: they are what load `.env` and `.env.ledger`.
+A bare `node ledger/cli.js` finds no keys and says so.
 
 ### Backfilling
 
@@ -714,7 +738,10 @@ reach the model, and which senders the rules missed — the last of which is a
 to-do list for new rules.
 
 Scheduling is launchd; see `ledger/launchd/`. Ingestion runs every 15 minutes,
-the daily summary at 23:40, retrospectives weekly and monthly.
+the daily summary at 23:40 (and again at 09:15, with the snippet purge riding
+on the same run), retrospectives weekly and monthly. Every ingestion run
+writes an `ingestion_runs` row and always closes it — `failed` when it
+crashed — so a row still `running` means the process itself died.
 
 ### Adding a source
 

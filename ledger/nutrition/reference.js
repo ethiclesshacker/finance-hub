@@ -29,7 +29,7 @@
 // name goes to the model, which is cheap and knows the difference.
 // ======================================================
 
-import { db } from '../db.js';
+import { rpc } from '../db.js';
 import { normalizeName } from '../../src/ledger/normalize.js';
 
 /**
@@ -63,6 +63,9 @@ const NOISE = new Set([
   'special', 'spl', 'new', 'fresh', 'hot', 'served',
 ]);
 
+// Not the judged rungs' tokenize(): this one keeps digits attached to their
+// letters, because "7inch" and "9inch" are a size apart and must stay two
+// different words. Letters-only tokens would pair them as one.
 const tokenSet = (name) => new Set(String(normalizeName(name) || '').split(' ').filter(Boolean));
 
 /** Levenshtein distance, capped at what we care about (small numbers). */
@@ -175,15 +178,12 @@ export function sameDish(query, candidate) {
  * token rule rules out the near-identical ones a score would wave through.
  */
 export async function findReference(userId, displayName, { minSimilarity = 0.55, log } = {}) {
-  const { data, error } = await db().rpc('food_match_item', {
+  const candidates = await rpc('food_match_item', {
     p_name: displayName,
     p_threshold: minSimilarity,
     p_limit: 5,
     p_user_id: userId,
-  });
-  if (error) throw new Error(`food_match_item(${displayName}) failed: ${error.message}`);
-
-  const candidates = data || [];
+  }) || [];
   if (!candidates.length) return null;
 
   for (const candidate of candidates) {

@@ -13,8 +13,8 @@
 // quietly implies full coverage.
 // ======================================================
 
-import { localDateISO } from './normalize.js';
-import { typeMeta } from './taxonomy.js';
+import { DEFAULT_TIME_ZONE, formatTime, localDateISO } from './dates.js';
+import { formatMoney, prune } from './normalize.js';
 
 // Moving money between your own pockets: it left one account and arrived in
 // another, or it paid off a card whose spends were already counted one by one.
@@ -61,7 +61,7 @@ export function isInflow(event) {
  * Group events into the sections a daily or period summary reports on.
  * Pure: same events in, same digest out.
  */
-export function buildDigest(events, { timeZone = 'Asia/Kolkata', from = null, to = null } = {}) {
+export function buildDigest(events, { timeZone = DEFAULT_TIME_ZONE, from = null, to = null } = {}) {
   const live = (events || []).filter(e => e.status !== 'dismissed');
   const byType = {};
   for (const event of live) (byType[event.type] ||= []).push(event);
@@ -190,7 +190,7 @@ function openQuestions(events, needsReview, scheduled) {
         && event.source_count === 1 && !event.data?.order_id) {
       questions.push({
         event_id: event.id,
-        question: `What was the ${fmtMoney(event.data?.amount, event.data?.currency)} charge at ${event.data?.merchant || 'an unknown merchant'} for?`,
+        question: `What was the ${formatMoney(event.data?.amount, event.data?.currency)} charge at ${event.data?.merchant || 'an unknown merchant'} for?`,
         why: 'only a card alert; no order or receipt matched it',
       });
     }
@@ -259,7 +259,7 @@ export function lifeSection(days = []) {
 
   if (days.length === 1) {
     const d = days[0];
-    return stripEmpty({
+    return prune({
       recorded: true,
       steps: d.body?.steps, sleep_hours: d.body?.sleep_hours,
       fell_asleep: d.body?.fell_asleep, woke: d.body?.woke,
@@ -275,7 +275,7 @@ export function lifeSection(days = []) {
   const pick = (group, key) => days.map(d => d[group]?.[key]).filter(present).map(Number);
   const weights = days.filter(d => present(d.body?.weight_kg)).map(d => ({ day: d.day, kg: Number(d.body.weight_kg) }));
   const complete = days.filter(d => d.energy?.complete);
-  return stripEmpty({
+  return prune({
     recorded: true,
     days: days.length,
     steps_avg: present(mean(pick('body', 'steps'))) ? Math.round(mean(pick('body', 'steps'))) : null,
@@ -292,11 +292,6 @@ export function lifeSection(days = []) {
     workouts: activity.length || undefined,
     active_minutes: activity.reduce((sum, a) => sum + (Number(a.minutes) || 0), 0) || undefined,
   });
-}
-
-function stripEmpty(obj) {
-  return Object.fromEntries(Object.entries(obj).filter(([, v]) =>
-    v !== null && v !== undefined && !(Array.isArray(v) && !v.length)));
 }
 
 /** The body section as lines of text. Empty when nothing was recorded. */
@@ -346,8 +341,9 @@ export function renderLifeLines(body) {
  * LLM is disabled or unreachable, and it is the input the model is given when
  * it is enabled — so the prose can be rewritten but the facts cannot drift.
  */
-export function renderDigestText(digest, { label = 'Day' } = {}) {
+export function renderDigestText(digest, { label = 'Day', timeZone = DEFAULT_TIME_ZONE } = {}) {
   const lines = [];
+  const time = iso => formatTime(iso, timeZone);
   const section = (title, items, render) => {
     if (!items?.length) return;
     lines.push(`${title}:`);
@@ -366,12 +362,12 @@ export function renderDigestText(digest, { label = 'Day' } = {}) {
     lines.push(`People: ${digest.people.map(p => p.name).slice(0, 10).join(', ')}`);
   }
   if (digest.inflow?.total) {
-    lines.push(`Money in: ${fmtMoney(digest.inflow.total, 'INR')}`);
+    lines.push(`Money in: ${formatMoney(digest.inflow.total, 'INR')}`);
   }
   if (digest.spend?.total) {
     const buckets = Object.entries(digest.spend.by_bucket).slice(0, 5)
-      .map(([k, v]) => `${k} ${fmtMoney(v, 'INR')}`).join(', ');
-    lines.push(`Spend: ${fmtMoney(digest.spend.total, 'INR')}${buckets ? ` (${buckets})` : ''}`);
+      .map(([k, v]) => `${k} ${formatMoney(v, 'INR')}`).join(', ');
+    lines.push(`Spend: ${formatMoney(digest.spend.total, 'INR')}${buckets ? ` (${buckets})` : ''}`);
   }
 
   lines.push(...renderLifeLines(digest.body));
@@ -382,16 +378,7 @@ export function renderDigestText(digest, { label = 'Day' } = {}) {
   return lines.join('\n');
 }
 
-function time(iso) {
-  return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
-}
-function fmtMoney(amount, currency) {
-  if (!Number.isFinite(Number(amount))) return 'an unknown amount';
-  const symbol = { INR: '₹', USD: '$', EUR: '€', GBP: '£' }[currency || 'INR'] || '';
-  return `${symbol}${Math.round(Number(amount)).toLocaleString('en-IN')}`;
-}
 function fmtConfidence(value) {
   return value === null || value === undefined ? 'unknown' : `${Math.round(Number(value) * 100)}%`;
 }
 
-export { typeMeta };

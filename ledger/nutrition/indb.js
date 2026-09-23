@@ -26,7 +26,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { judge } from './databases.js';
+import { judge, servingRow, tokenize } from './databases.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -44,8 +44,7 @@ export function loadINDB() {
 // of them alone is noise. "ka sandwich" must not pull every sandwich.
 const STOP = new Set(['ka', 'ki', 'ke', 'kay', 'aur', 'with', 'and', 'the', 'of', 'in', 'style', 'indian', 'home', 'made', 'plain', 'fresh', 'hot', 'cold']);
 
-const tokenSet = (s) => new Set(
-  String(s).toLowerCase().match(/[a-z]+/g)?.filter((t) => !STOP.has(t)) || []);
+const tokenSet = (s) => tokenize(s, STOP);
 
 /**
  * Top-k INDB rows for a dish name, scored by how much of each side the shared
@@ -148,24 +147,17 @@ export function matchINDB(displayName) {
   // INDB's own serving is the whole point of using it; 100g is the last resort
   // and is recorded as such.
   const grams = c.serving_g || 100;
-  const per = (v) => (Number.isFinite(v) ? Math.round((v * grams) / 100 * 10) / 10 : null);
 
   return {
     ok: true,
-    row: {
-      kcal: per(c.kcal_100g),
-      protein_g: per(c.protein_100g),
-      carbs_g: per(c.carbs_100g),
-      fat_g: per(c.fat_100g),
-      portion_g: grams,
+    row: servingRow(c, grams, {
       source: 'indb',
       confidence: 0.8,
       source_ref: {
         ...c.ref,
-        kcal_100g: c.kcal_100g,
         portion_basis: c.serving_g ? 'indb_serving' : 'assumed_100g',
         coverage: Math.round(c.coverage * 100) / 100,
       },
-    },
+    }),
   };
 }

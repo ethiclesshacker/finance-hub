@@ -20,21 +20,16 @@
 // ======================================================
 
 import { config } from './config.js';
-import { db, resolveUserId } from './db.js';
+import { db, rpc, resolveUserId, searchEvents } from './db.js';
 import { parseQuickEntry, parseMealEntry } from '../src/ledger/nlparse.js';
 import { dishName, summariseItems } from '../src/ledger/items.js';
-import { localDateISO, normalizeName, entityRef } from '../src/ledger/normalize.js';
+import { normalizeName, entityRef, prune } from '../src/ledger/normalize.js';
+import { dayStartISO, localDateISO, shiftISO, startOfWeek } from '../src/ledger/dates.js';
+import { summarise, bucketDays } from '../src/ledger/nutrition.js';
 import { findReference } from './nutrition/reference.js';
-import { resolvePending } from './nutrition/resolve.js';
+import { resolvePending, setManual, pendingItems, coverage } from './nutrition/resolve.js';
+import { lookupBarcode } from './nutrition/databases.js';
 import { resolveSettings } from '../src/settings-schema.js';
-
-async function rpc(fn, args) {
-  const { data, error } = await db().rpc(fn, args);
-  if (error) throw new Error(`${fn}: ${error.message}${error.hint ? ` — ${error.hint}` : ''}`);
-  return data;
-}
-
-
 
 /**
  * Turn a date expression into an instant range.
@@ -58,13 +53,11 @@ export function resolveRange(range, timeZone = config.timeZone) {
   if (span) {
     return { from: toInstant(span[1], timeZone, false), to: toInstant(span[2], timeZone, true) };
   }
-  const day = (iso, offset) => shiftDate(iso, offset);
-
   const named = {
     today:      [today, today],
-    yesterday:  [day(today, -1), day(today, -1)],
+    yesterday:  [shiftISO(today, -1), shiftISO(today, -1)],
     'this week':  [startOfWeek(today), today],
-    'last week':  [shiftDate(startOfWeek(today), -7), shiftDate(startOfWeek(today), -1)],
+    'last week':  [shiftISO(startOfWeek(today), -7), shiftISO(startOfWeek(today), -1)],
     'this month': [today.slice(0, 8) + '01', today],
     'last month': lastMonth(today),
     'this year':  [today.slice(0, 4) + '-01-01', today],
@@ -77,7 +70,7 @@ export function resolveRange(range, timeZone = config.timeZone) {
 
   const lastN = phrase.match(/^last\s+(\d{1,3})\s+days?$/);
   if (lastN) {
-    return { from: toInstant(shiftDate(today, -parseInt(lastN[1], 10)), timeZone, false),
+    return { from: toInstant(shiftISO(today, -parseInt(lastN[1], 10)), timeZone, false),
              to: toInstant(today, timeZone, true) };
   }
 
@@ -90,29 +83,9 @@ function toInstant(value, timeZone, endOfDay) {
   const text = String(value);
   if (/T\d{2}:\d{2}/.test(text)) return new Date(text).toISOString();
   const date = /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : localDateISO(new Date(text), timeZone);
-  return zoneMidnight(endOfDay ? shiftDate(date, 1) : date, timeZone);
+  return dayStartISO(endOfDay ? shiftISO(date, 1) : date, timeZone);
 }
 
-function zoneMidnight(isoDate, timeZone) {
-  const [y, m, d] = isoDate.split('-').map(Number);
-  const guess = Date.UTC(y, m - 1, d);
-  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
-    timeZone, hour12: false, year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-  }).formatToParts(new Date(guess)).map(p => [p.type, p.value]));
-  const asUTC = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour % 24, +parts.minute, +parts.second);
-  return new Date(guess - (asUTC - guess)).toISOString();
-}
-
-function shiftDate(isoDate, days) {
-  const [y, m, d] = isoDate.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
-}
-function startOfWeek(isoDate) {
-  const [y, m, d] = isoDate.split('-').map(Number);
-  const date = new Date(Date.UTC(y, m - 1, d));
-  return shiftDate(isoDate, -((date.getUTCDay() + 6) % 7));
-}
 function lastMonth(today) {
   const [y, m] = today.split('-').map(Number);
   const start = new Date(Date.UTC(y, m - 2, 1));
@@ -137,6 +110,35 @@ export function resolveDays(range, fallback = 'last 7 days', timeZone = config.t
 
 // ── The tools ──────────────────────────────────────────
 
+/**
+ * A handler that is nothing but "resolve the range, call the function".
+ * Most read tools are exactly that, and writing each one out by hand is how
+ * one of them ends up passing a date where the SQL wanted an instant.
+ *
+ *   days   — the function takes local dates (the health ones), not instants
+ *   user   — false for the few functions that take no p_user_id
+ *   args   — extra SQL arguments derived from the tool's own arguments
+ */
+function rangedRpc(fn, { days = false, fallback = 'last 7 days', user = true, args: extra = () => ({}) } = {}) {
+  return async (args) => {
+    const { from, to } = days ? resolveDays(args.date_range, fallback) : resolveRange(args.date_range);
+    return rpc(fn, {
+      ...extra(args), p_from: from, p_to: to,
+      ...(user ? { p_user_id: await resolveUserId() } : {}),
+    });
+  };
+}
+
+/** A read tool over a range of local days: one row per day comes back. */
+function dayRangedTool(fn, { description, fallback = 'last 7 days', properties = {}, required, args }) {
+  return {
+    description,
+    readOnly: true,
+    parameters: prune({ type: 'object', required, properties: { ...properties, date_range: { ...DATE_RANGE, default: fallback } } }),
+    handler: rangedRpc(fn, { days: true, fallback, args }),
+  };
+}
+
 const DATE_RANGE = {
   type: 'string',
   description: 'today, yesterday, this week, last week, this month, last month, this year, "last N days", '
@@ -145,6 +147,7 @@ const DATE_RANGE = {
 
 export const TOOLS = {
   search_events: {
+    readOnly: true,
     description: 'Search the event ledger by text, type, entity, status and date range. The primary way to answer questions about what happened.',
     parameters: {
       type: 'object',
@@ -163,25 +166,19 @@ export const TOOLS = {
     },
     handler: async (args) => {
       const { from, to } = resolveRange(args.date_range);
-      return rpc('ledger_search_events', {
-        p_query: args.query ?? null,
-        p_types: args.types ?? null,
-        p_subtypes: args.subtypes ?? null,
-        p_statuses: args.statuses ?? null,
-        p_source_types: args.source_types ?? null,
-        p_entity_id: args.entity_id ?? null,
-        p_entity_name: args.entity_name ?? null,
+      return searchEvents(await resolveUserId(), prune({
+        p_query: args.query, p_types: args.types, p_subtypes: args.subtypes,
+        p_statuses: args.statuses, p_source_types: args.source_types,
+        p_entity_id: args.entity_id, p_entity_name: args.entity_name,
         p_from: from, p_to: to,
-        p_min_confidence: args.min_confidence ?? null,
-        p_limit: args.limit ?? 50,
-        p_offset: args.offset ?? 0,
-        p_ascending: args.ascending ?? false,
-        p_user_id: await resolveUserId(),
-      });
+        p_min_confidence: args.min_confidence,
+        p_limit: args.limit ?? 50, p_offset: args.offset ?? 0, p_ascending: args.ascending,
+      }));
     },
   },
 
   get_event: {
+    readOnly: true,
     description: 'One event in full: structured fields, every source it came from, related entities and events, and its edit history.',
     parameters: { type: 'object', required: ['event_id'], properties: { event_id: { type: 'string' } } },
     handler: args => rpc('ledger_get_event', { p_event_id: args.event_id }),
@@ -214,7 +211,7 @@ export const TOOLS = {
       if (args.natural_language) {
         const parsed = parseQuickEntry(args.natural_language, { timeZone: config.timeZone });
         if (!parsed) throw new Error('Could not parse that phrase into an event.');
-        event = { ...parsed.event, ...stripUndefined(args) };
+        event = { ...parsed.event, ...prune(args) };
         entities = args.entities || parsed.event.entities;
       }
 
@@ -335,7 +332,7 @@ export const TOOLS = {
         throw new Error('A meal needs at least one dish or a place. "going to Ravi\'s for dinner" is enough; "ate" is not.');
       }
 
-      const data = stripUndefined({
+      const data = prune({
         restaurant: place,
         items: items.length ? items : undefined,
         amount,
@@ -389,8 +386,7 @@ export const TOOLS = {
         }
       }
 
-
-      const eventId = result?.event?.id ?? result?.id;
+      const eventId = result?.event_id;
       const nutrition = eventId ? await priceMeal(userId, eventId, occurredAt, items.map(i => i.name)) : null;
 
       return { ...result,
@@ -475,7 +471,6 @@ export const TOOLS = {
     },
     handler: async (args) => {
       const userId = await resolveUserId();
-      const { lookupBarcode } = await import('./nutrition/databases.js');
 
       const found = await lookupBarcode(args.barcode);
       if (!found.ok) {
@@ -525,11 +520,12 @@ export const TOOLS = {
         p_allow_merge: false, p_user_id: userId,
       });
 
-      return { ...result, logged: true, event_id: logged?.id, qty };
+      return { ...result, logged: true, event_id: logged?.event_id, qty };
     },
   },
 
   get_nutrition: {
+    readOnly: true,
     description:
       'What the user actually ate over a period, in calories and protein. Use for "how many calories did '
       + 'I have today", "am I eating enough protein this week", "how did last month compare". '
@@ -552,63 +548,45 @@ export const TOOLS = {
         p_from: from, p_to: to, p_limit: 2000, p_user_id: userId,
       }) || [];
 
-      const priced = rows.filter(r => r.kcal !== null);
-      const unknown = rows.length - priced.length;
-      const partial = priced.filter(r => r.basis === 'partial');
-
-      const byDay = new Map();
-      for (const r of priced) {
-        const day = localDateISO(r.occurred_at, config.timeZone);
-        const b = byDay.get(day) || { date: day, kcal: 0, protein_g: 0, meals: 0 };
-        b.kcal += Number(r.kcal); b.protein_g += Number(r.protein_g || 0); b.meals++;
-        byDay.set(day, b);
-      }
-      const days = [...byDay.values()].sort((a, b) => (a.date < b.date ? -1 : 1))
-        .map(d => ({ ...d, kcal: Math.round(d.kcal), protein_g: Math.round(d.protein_g) }));
-
-      const kcal = Math.round(priced.reduce((n, r) => n + Number(r.kcal), 0));
-      const protein = Math.round(priced.reduce((n, r) => n + Number(r.protein_g || 0), 0));
+      // The SQL twin already priced each meal; the rollup only reads its
+      // verdict. Same summarise() the Food screen uses, so the two agree.
+      const s = summarise(rows, null, {
+        dateOf: iso => localDateISO(iso, config.timeZone),
+        nutritionOf: r => (r.kcal === null || r.kcal === undefined
+          ? { basis: 'none' }
+          : { kcal: Math.round(Number(r.kcal)), protein: Math.round(Number(r.protein_g || 0)),
+              basis: r.basis === 'partial' ? 'partial' : 'itemized' }),
+      });
 
       const summary = {
         range: { from, to },
-        kcal, protein_g: protein,
-        meals_priced: priced.length,
-        meals_unpriced: unknown,
-        meals_partial: partial.length,
-        eating_days: days.length,
-        kcal_per_eating_day: days.length ? Math.round(kcal / days.length) : null,
-        protein_per_eating_day: days.length ? Math.round(protein / days.length) : null,
-        coverage: rows.length ? Math.round((priced.length / rows.length) * 100) / 100 : 0,
+        kcal: s.kcal, protein_g: s.protein,
+        meals_priced: s.priced,
+        meals_unpriced: s.unknown,
+        meals_partial: s.partial,
+        eating_days: s.activeDays,
+        kcal_per_eating_day: s.kcalPerDay,
+        protein_per_eating_day: s.proteinPerDay,
+        coverage: Math.round(s.coverage * 100) / 100,
         // Said explicitly so it survives into whatever Hermes tells the user.
-        caveat: unknown
-          ? `${unknown} of ${rows.length} meals in this period have no nutrition yet, so the totals are a floor.`
+        caveat: s.unknown
+          ? `${s.unknown} of ${rows.length} meals in this period have no nutrition yet, so the totals are a floor.`
           : 'Every meal in this period is priced, but only meals with a receipt are in the ledger at all.',
       };
 
-      if ((args.by ?? 'total') === 'total') return summary;
-      if (args.by === 'day') return { ...summary, days };
-
-      const bucket = (iso) => args.by === 'month'
-        ? `${iso.slice(0, 7)}-01`
-        : (() => { const d = new Date(`${iso}T00:00:00Z`);
-                   d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
-                   return d.toISOString().slice(0, 10); })();
-
-      const groups = new Map();
-      for (const d of days) {
-        const key = bucket(d.date);
-        const g = groups.get(key) || { start: key, kcal: 0, protein_g: 0, meals: 0, eating_days: 0 };
-        g.kcal += d.kcal; g.protein_g += d.protein_g; g.meals += d.meals; g.eating_days++;
-        groups.set(key, g);
+      const by = args.by ?? 'total';
+      if (by === 'total') return summary;
+      if (by === 'day') {
+        return { ...summary, days: bucketDays(s.days, 'day').map(b =>
+          ({ date: b.key, kcal: b.kcal, protein_g: b.protein, meals: b.meals })) };
       }
       // Per eating day within the bucket, so switching `by` changes the
       // resolution and not the units.
-      const buckets = [...groups.values()].sort((a, b) => (a.start < b.start ? -1 : 1)).map(g => ({
-        ...g,
-        kcal_per_eating_day: Math.round(g.kcal / g.eating_days),
-        protein_per_eating_day: Math.round(g.protein_g / g.eating_days),
+      const buckets = bucketDays(s.days, by).map(b => ({
+        start: b.key, eating_days: b.days, meals: b.meals,
+        kcal_per_eating_day: b.kcal, protein_per_eating_day: b.protein,
       }));
-      return { ...summary, [args.by === 'week' ? 'weeks' : 'months']: buckets };
+      return { ...summary, [by === 'week' ? 'weeks' : 'months']: buckets };
     },
   },
 
@@ -633,31 +611,22 @@ export const TOOLS = {
     },
     handler: async (args) => {
       const userId = await resolveUserId();
-      const { setManual } = await import('./nutrition/resolve.js');
 
       const result = await setManual(userId, args.name, {
         kcal: args.kcal, protein_g: args.protein_g, carbs_g: args.carbs_g,
         fat_g: args.fat_g, portion_g: args.portion_g, category: args.category,
       });
 
-      // How much of the past this just changed — the reason a correction here
-      // is worth more than editing one meal.
-      const affected = await rpc('food_event_nutrition', {
-        p_from: null, p_to: null, p_limit: 2000, p_user_id: userId,
-      }) || [];
-      const norm = normalizeName(args.name);
-      const meals = affected.filter(r => r.items_total > 0 && r.kcal !== null).length;
-
       return {
         ...result, dish: args.name, verified: true,
         per_serving: { kcal: args.kcal, protein_g: args.protein_g ?? null, portion_g: args.portion_g ?? null },
-        note: `Applied to every past and future meal containing "${args.name}" (${norm}). `
-            + `${meals} meals in the ledger currently carry a nutrition total.`,
+        note: `Applied to every past and future meal containing "${args.name}" (${normalizeName(args.name)}).`,
       };
     },
   },
 
   list_unresolved_foods: {
+    readOnly: true,
     description:
       'Dishes the ledger has seen but has no nutrition for, most-eaten first. Use this to find out what '
       + 'is dragging coverage down, or to ask the user about the handful of dishes that would improve the '
@@ -668,12 +637,9 @@ export const TOOLS = {
     },
     handler: async (args) => {
       const userId = await resolveUserId();
-      const pending = await rpc('food_pending_items', {
-        p_limit: Math.min(Math.max(Number(args.limit) || 20, 1), 200), p_user_id: userId,
-      }) || [];
-      const coverage = await rpc('food_coverage', { p_user_id: userId });
+      const pending = await pendingItems(userId, Math.min(Math.max(Number(args.limit) || 20, 1), 200));
       return {
-        coverage,
+        coverage: await coverage(userId),
         unresolved: pending.map(p => ({ name: p.display_name, times_eaten: p.occurrences })),
         next: pending.length
           ? 'Ask the user about the top few, then call set_food_nutrition — or run `npm run ledger:nutrition` to resolve them automatically.'
@@ -842,7 +808,7 @@ export const TOOLS = {
           type: 'activity', subtype: 'workout',
           title: bits ? `${name[0].toUpperCase() + name.slice(1)} — ${bits}` : name[0].toUpperCase() + name.slice(1),
           description: args.note || null,
-          data: stripUndefined({
+          data: prune({
             activity: name.toLowerCase(),
             duration_min: args.duration_min,
             distance_km: args.distance_km,
@@ -866,12 +832,14 @@ export const TOOLS = {
   },
 
   get_daily_summary: {
+    readOnly: true,
     description: 'The stored summary for one day, with a live event count so a stale summary is visible as stale.',
     parameters: { type: 'object', required: ['date'], properties: { date: { type: 'string', description: 'YYYY-MM-DD' } } },
     handler: async args => rpc('ledger_get_daily_summary', { p_date: args.date, p_user_id: await resolveUserId() }),
   },
 
   get_period_summary: {
+    readOnly: true,
     description: 'A week or month: the stored retrospective if one exists, plus live aggregates and the daily summaries inside it.',
     parameters: {
       type: 'object', required: ['start_date', 'end_date'],
@@ -887,28 +855,28 @@ export const TOOLS = {
   },
 
   get_entity: {
+    readOnly: true,
     description: 'One merchant, person, place or project: how often it appears, when it was first and last seen, and the total spent with it.',
     parameters: { type: 'object', required: ['entity_id'], properties: { entity_id: { type: 'string' } } },
     handler: args => rpc('ledger_get_entity', { p_entity_id: args.entity_id }),
   },
 
   search_entity_events: {
+    readOnly: true,
     description: 'Every event linked to an entity. "What have I bought from Amazon", "when was I last in Hyderabad", "meetings with this person".',
     parameters: {
       type: 'object', required: ['entity_id'],
       properties: { entity_id: { type: 'string' }, date_range: DATE_RANGE, limit: { type: 'integer', default: 100 } },
     },
-    handler: async (args) => {
-      const { from, to } = resolveRange(args.date_range);
-      return rpc('ledger_search_entity_events', {
-        p_entity_id: args.entity_id, p_from: from, p_to: to, p_limit: args.limit ?? 100,
-      });
-    },
+    handler: rangedRpc('ledger_search_entity_events', {
+      user: false, args: a => ({ p_entity_id: a.entity_id, p_limit: a.limit ?? 100 }),
+    }),
   },
 
   // ── Beyond the nine, because these answer real questions ──
 
   search_entities: {
+    readOnly: true,
     description: 'Find entities by name. Use this to turn "Amazon" into an entity_id before calling search_entity_events.',
     parameters: {
       type: 'object',
@@ -921,12 +889,10 @@ export const TOOLS = {
   },
 
   get_stats: {
+    readOnly: true,
     description: 'Aggregates over a period: counts by type, spend by category, top entities, how much needs review. Computed from events at call time, never stored.',
     parameters: { type: 'object', properties: { date_range: DATE_RANGE } },
-    handler: async (args) => {
-      const { from, to } = resolveRange(args.date_range);
-      return rpc('ledger_stats', { p_from: from, p_to: to, p_user_id: await resolveUserId() });
-    },
+    handler: rangedRpc('ledger_stats'),
   },
 
   // ── The whole day ────────────────────────────────────
@@ -936,6 +902,7 @@ export const TOOLS = {
   // hoping they agreed. life_days() joins them in SQL; this is the front door.
 
   get_day: {
+    readOnly: true,
     description: 'Everything about a day, or each day in a range, in one object: money spent and received, calories and protein '
       + 'eaten, steps, sleep, heart, weight, calories burned, the energy balance against the calorie target, and workouts. '
       + 'START HERE for "how was my day", "how was my week", "am I in a deficit", or anything that crosses money, food and body. '
@@ -947,15 +914,13 @@ export const TOOLS = {
       + 'he did not log, so ask what he ate rather than congratulating him on the deficit). '
       + 'Up to 120 days; for longer body-only trends use get_health_overview.',
     parameters: { type: 'object', properties: { date_range: { ...DATE_RANGE, default: 'today' } } },
-    handler: async (args) => {
-      const { from, to } = resolveDays(args.date_range, 'today');
-      return rpc('life_days', { p_from: from, p_to: to, p_user_id: await resolveUserId() });
-    },
+    handler: rangedRpc('life_days', { days: true, fallback: 'today' }),
   },
 
   // ── Finance ──────────────────────────────────────────
 
   get_net_worth: {
+    readOnly: true,
     description: 'Net worth from the snapshots he records: the latest figure with its asset breakdown (stocks, mutual funds, cash, '
       + 'EPF, gold, FDs) and liabilities, the change since the previous snapshot, and recent history. In INR. Snapshots are '
       + 'entered by hand every week or two, so always say the date of the latest one.',
@@ -964,6 +929,7 @@ export const TOOLS = {
   },
 
   get_card_points: {
+    readOnly: true,
     description: 'Credit card reward points (HSBC TravelOne): current balance, lifetime accrued and redeemed, and for a period the '
       + 'spend, points earned, points per ₹100, a month-by-month split, top merchants and past redemptions. The balance is always '
       + 'lifetime; date_range only scopes the period figures. For what was bought, use search_events — this is the points view. '
@@ -978,6 +944,7 @@ export const TOOLS = {
   },
 
   get_targets: {
+    readOnly: true,
     description: 'His own targets and assumptions: daily calorie target, monthly income and baseline expenses, FI multiplier and the '
       + 'FI target it implies, expected return, retirement age, emergency runway, card reward targets. Each value says whether HE set '
       + 'it (set_by: user) or it is the app default (set_by: default) — treat a default as a placeholder, not as his goal. '
@@ -1007,35 +974,23 @@ export const TOOLS = {
   // device, ~1,300 a day. None of these tools return samples. They return days
   // (or hours, or nights), already deduplicated across iPhone and Watch in SQL.
 
-  get_health_overview: {
+  get_health_overview: dayRangedTool('health_overview', {
     description: 'Apple Health, one row per day: steps, active and resting calories burned, distance, exercise minutes, '
       + 'sleep hours with bed and wake times, resting heart rate, heart rate min/avg/max, HRV, weight, workouts. '
       + 'START HERE for any question about activity, sleep, fitness, heart or weight. Days with no data still appear, as just a date.',
-    parameters: { type: 'object', properties: { date_range: { ...DATE_RANGE, default: 'last 7 days' } } },
-    handler: async (args) => {
-      const { from, to } = resolveDays(args.date_range);
-      return rpc('health_overview', { p_from: from, p_to: to, p_user_id: await resolveUserId() });
-    },
-  },
+  }),
 
-  get_health_metric: {
+  get_health_metric: dayRangedTool('health_series', {
     description: 'One Apple Health metric across days, for anything the overview does not carry or when only one number is wanted. '
       + 'Totals per day for cumulative types (step_count, active_energy, water, dietary_*); min/avg/max/latest per day for readings '
       + '(heart_rate, hrv_sdnn, body_mass, oxygen_saturation). Call list_health_metrics for the exact type names that have data.',
-    parameters: {
-      type: 'object', required: ['type'],
-      properties: {
-        type: { type: 'string', description: 'HealthKit type in snake_case, e.g. step_count, heart_rate, body_mass.' },
-        date_range: { ...DATE_RANGE, default: 'last 7 days' },
-      },
-    },
-    handler: async (args) => {
-      const { from, to } = resolveDays(args.date_range);
-      return rpc('health_series', { p_type: args.type, p_from: from, p_to: to, p_user_id: await resolveUserId() });
-    },
-  },
+    required: ['type'],
+    properties: { type: { type: 'string', description: 'HealthKit type in snake_case, e.g. step_count, heart_rate, body_mass.' } },
+    args: a => ({ p_type: a.type }),
+  }),
 
   get_health_day_detail: {
+    readOnly: true,
     description: 'One Apple Health metric across the hours of a single day — when were the steps walked, what did heart rate do overnight. '
       + 'Buckets for a cumulative type add up to that day\'s total.',
     parameters: {
@@ -1054,28 +1009,20 @@ export const TOOLS = {
     },
   },
 
-  get_sleep: {
+  get_sleep: dayRangedTool('health_sleep', {
     description: 'Sleep per night with stages: hours asleep, fell-asleep and wake times, minutes of core, deep, REM and awake, time in bed. '
       + 'A night is dated by the morning it ended. Overlapping records are merged, and time in bed is not counted as sleep.',
-    parameters: { type: 'object', properties: { date_range: { ...DATE_RANGE, default: 'last 7 days' } } },
-    handler: async (args) => {
-      const { from, to } = resolveDays(args.date_range);
-      return rpc('health_sleep', { p_from: from, p_to: to, p_user_id: await resolveUserId() });
-    },
-  },
+  }),
 
-  get_workouts: {
+  get_workouts: dayRangedTool('life_activity', {
     description: 'Workouts and physical activity: everything the Apple Watch recorded, plus anything he told you that the Watch did '
       + 'not. Each item says its source (watch or ledger). When he described a workout the Watch also recorded, it appears ONCE, as '
       + 'the Watch measured it, with his words in `note`. Check here before log_activity.',
-    parameters: { type: 'object', properties: { date_range: { ...DATE_RANGE, default: 'last 30 days' } } },
-    handler: async (args) => {
-      const { from, to } = resolveDays(args.date_range, 'last 30 days');
-      return rpc('life_activity', { p_from: from, p_to: to, p_user_id: await resolveUserId() });
-    },
-  },
+    fallback: 'last 30 days',
+  }),
 
   list_health_metrics: {
+    readOnly: true,
     description: 'Which Apple Health types have been synced, with row counts, date span, and when the phone last synced. '
       + 'Use it to tell "no data that day" from "that metric is not being synced", and to find exact type names.',
     parameters: { type: 'object', properties: {} },
@@ -1083,6 +1030,7 @@ export const TOOLS = {
   },
 
   get_review_queue: {
+    readOnly: true,
     description: 'Events the system is unsure about, for confirming, correcting, merging or dismissing.',
     parameters: { type: 'object', properties: { limit: { type: 'integer', default: 50 } } },
     handler: async args => rpc('ledger_review_queue', { p_limit: args.limit ?? 50, p_user_id: await resolveUserId() }),
@@ -1100,20 +1048,24 @@ export const TOOLS = {
   },
 
   export_ledger: {
+    readOnly: true,
     description: 'Everything, as JSON: events with their sources, entities and summaries. The data is yours and portable.',
     parameters: { type: 'object', properties: { date_range: DATE_RANGE } },
-    handler: async (args) => {
-      const { from, to } = resolveRange(args.date_range);
-      return rpc('ledger_export', { p_from: from, p_to: to, p_user_id: await resolveUserId() });
-    },
+    handler: rangedRpc('ledger_export'),
   },
 };
 
-/** Function-calling schema for every tool, ready to hand to a model. */
+/**
+ * Function-calling schema for every tool, ready to hand to a model. `npm run
+ * ledger:tools-manifest` prints it; docs/hermes-tools.json is that output.
+ */
 export const TOOL_SPECS = Object.entries(TOOLS).map(([name, spec]) => ({
   type: 'function',
   function: { name, description: spec.description, parameters: spec.parameters },
 }));
+
+/** The tools that only read. Derived from the specs, so it cannot go stale. */
+export const READ_ONLY_TOOLS = new Set(Object.entries(TOOLS).filter(([, spec]) => spec.readOnly).map(([name]) => name));
 
 export async function runTool(name, args = {}) {
   const tool = TOOLS[name];
@@ -1147,11 +1099,7 @@ async function snapDishes(items, userId) {
 
   let known = new Map();
   try {
-    const result = await rpc('ledger_search_events', {
-      p_query: null, p_types: ['food'], p_subtypes: null, p_statuses: null, p_source_types: null,
-      p_entity_id: null, p_entity_name: null, p_from: null, p_to: null, p_min_confidence: null,
-      p_limit: 300, p_offset: 0, p_ascending: false, p_user_id: userId,
-    });
+    const result = await searchEvents(userId, { p_types: ['food'], p_limit: 300 });
     for (const event of result?.events || []) {
       for (const item of event.data?.items || []) {
         if (item?.name) known.set(String(item.name).toLowerCase().replace(/\s+/g, ' ').trim(), item.name);
@@ -1216,7 +1164,7 @@ async function priceMeal(userId, eventId, occurredAt, names) {
     const row = rows.find(r => (r.event_id ?? r.id) === eventId) || (rows.length === 1 ? rows[0] : null);
     if (!row) return null;
     const total = Number(row.items_total ?? 0), resolved = Number(row.items_resolved ?? 0);
-    return stripUndefined({
+    return prune({
       kcal: row.kcal === null || row.kcal === undefined ? null : Math.round(Number(row.kcal)),
       protein_g: row.protein_g === null || row.protein_g === undefined ? undefined : Math.round(Number(row.protein_g)),
       // "full" means every dish is priced; "partial" means the total is a
@@ -1232,11 +1180,7 @@ async function priceMeal(userId, eventId, occurredAt, names) {
 /** The food event nearest to now inside a range — "the dinner I mentioned". */
 async function latestMeal(range, userId) {
   const { from, to } = resolveRange(range);
-  const result = await rpc('ledger_search_events', {
-    p_query: null, p_types: ['food'], p_subtypes: null, p_statuses: null, p_source_types: null,
-    p_entity_id: null, p_entity_name: null, p_from: from, p_to: to, p_min_confidence: null,
-    p_limit: 50, p_offset: 0, p_ascending: false, p_user_id: userId,
-  });
+  const result = await searchEvents(userId, { p_types: ['food'], p_from: from, p_to: to, p_limit: 50 });
   const events = result?.events || [];
   if (!events.length) return null;
 
@@ -1246,6 +1190,3 @@ async function latestMeal(range, userId) {
   return rpc('ledger_get_event', { p_event_id: nearest.id });
 }
 
-function stripUndefined(obj) {
-  return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined && v !== null));
-}

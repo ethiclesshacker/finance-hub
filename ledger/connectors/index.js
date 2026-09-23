@@ -8,7 +8,7 @@
 
 import { connector as imap } from './imap.js';
 
-export const CONNECTORS = { imap };
+const CONNECTORS = { imap };
 
 export function getConnector(protocol) {
   const connector = CONNECTORS[protocol];

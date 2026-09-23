@@ -23,7 +23,7 @@
 // happens at read time in SQL, and correcting one row re-values the whole year.
 // ======================================================
 
-import { db, resolveUserId } from '../db.js';
+import { db, rpc, resolveUserId } from '../db.js';
 import { config } from '../config.js';
 import { normalizeName } from '../../src/ledger/normalize.js';
 import { curatedLookup, isNonFood, looksPackaged } from './curated.js';
@@ -34,27 +34,19 @@ import { estimateBatch } from './llm.js';
 
 /** Everything the resolver still has no answer for, heaviest first. */
 export async function pendingItems(userId, limit = 500) {
-  const { data, error } = await db().rpc('food_pending_items', {
-    p_limit: limit, p_user_id: userId,
-  });
-  if (error) throw new Error(`food_pending_items failed: ${error.message}`);
-  return data || [];
+  return await rpc('food_pending_items', { p_limit: limit, p_user_id: userId }) || [];
 }
 
 /** How much of the ledger the dictionary can currently answer. */
 export async function coverage(userId) {
-  const { data, error } = await db().rpc('food_coverage', { p_user_id: userId });
-  if (error) throw new Error(`food_coverage failed: ${error.message}`);
-  return data || {};
+  return await rpc('food_coverage', { p_user_id: userId }) || {};
 }
 
-async function upsert(userId, displayName, row) {
-  const { data, error } = await db().rpc('food_upsert_item', {
+function upsert(userId, displayName, row) {
+  return rpc('food_upsert_item', {
     p_user_id: userId,
     p_payload: { display_name: displayName, ...row },
   });
-  if (error) throw new Error(`food_upsert_item(${displayName}) failed: ${error.message}`);
-  return data;
 }
 
 /**
@@ -307,7 +299,6 @@ export async function reanchor({ userId, dryRun = false, log = console.log } = {
   log(`${rows.length} model-estimated dishes to re-anchor.\n`);
 
   // ── Pass 1: measured upgrades ────────────────────────
-  const { matchINDB } = await import('./indb.js');
   const remaining = [];
   for (const row of rows) {
     const hit = matchINDB(row.display_name);
@@ -319,7 +310,6 @@ export async function reanchor({ userId, dryRun = false, log = console.log } = {
   }
 
   // ── Pass 2: grounded re-estimation ───────────────────
-  const { estimateBatch } = await import('./llm.js');
   const batchSize = config.limits.llmBatchSize * 6;
   for (let i = 0; i < remaining.length; i += batchSize) {
     const batch = remaining.slice(i, i + batchSize);

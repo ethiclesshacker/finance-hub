@@ -35,7 +35,8 @@ const ALIASES = [
   { match: ['flipkart'],      name: 'Flipkart',      type: 'merchant',   category: 'shopping' },
   { match: ['myntra'],        name: 'Myntra',        type: 'merchant',   category: 'clothing' },
   { match: ['ajio'],          name: 'Ajio',          type: 'merchant',   category: 'clothing' },
-  { match: ['swiggy',    'instamart'], name: 'Swiggy',   type: 'merchant', category: 'food_delivery' },
+  // Swiggy bills as Bundl Technologies on card statements.
+  { match: ['swiggy', 'instamart', 'bundl'], name: 'Swiggy', type: 'merchant', category: 'food_delivery' },
   // Zomato bills as Eternal Limited, which is what lands on card statements.
   { match: ['zomato', 'eternal'], name: 'Zomato', type: 'merchant', category: 'food_delivery' },
   { match: ['blinkit', 'blink commerce'], name: 'Blinkit', type: 'merchant', category: 'groceries' },
@@ -65,6 +66,12 @@ const ALIASES = [
   { match: ['google'],        name: 'Google',        type: 'company',    category: 'technology' },
   { match: ['microsoft'],     name: 'Microsoft',     type: 'company',    category: 'technology' },
   { match: ['openai'],        name: 'OpenAI',        type: 'company',    category: 'technology' },
+  // District (tickets and dining) charges the card as Orbgen Technologies.
+  { match: ['orbgen'],        name: 'District',      type: 'merchant',   category: 'entertainment' },
+  // The bill comes from Jio; the card alert says MYJIO.
+  { match: ['jio', 'myjio'],  name: 'Jio',           type: 'company',    category: 'utilities' },
+  // "Tata 1Mg Healthca" is the statement's truncation of Tata 1mg Healthcare.
+  { match: ['tata 1mg', '1mg'], name: 'Tata 1mg',    type: 'merchant',   category: 'pharmacy' },
   { match: ['third wave'],    name: 'Third Wave Coffee', type: 'restaurant', category: 'cafe' },
   { match: ['starbucks'],     name: 'Starbucks',     type: 'restaurant', category: 'cafe' },
   { match: ['blue tokai'],    name: 'Blue Tokai',    type: 'restaurant', category: 'cafe' },
@@ -145,7 +152,7 @@ export function isPaymentRail(name) {
  * and append routing markers. Left in, each variant becomes its own entity, so
  * "what have I spent at District" answers only for whichever spelling won.
  */
-export function stripCardDescriptor(raw) {
+function stripCardDescriptor(raw) {
   if (!raw) return raw;
   return String(raw)
     .replace(/^[A-Za-z]{2,6}\*/, '')                              // CAS*, RSP*, RZP*, PAYU*
@@ -207,7 +214,31 @@ function titleCase(s) {
              .slice(0, 200);
 }
 
+// ── Shapes ─────────────────────────────────────────────
+
+/**
+ * Drop what carries nothing: null, undefined, an empty string, an empty list.
+ * Every `data` object in the ledger goes through this, so a key's presence
+ * means something was known — a reader never has to tell null from absent.
+ */
+export function prune(obj) {
+  return Object.fromEntries(Object.entries(obj).filter(([, v]) =>
+    v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && !v.length)));
+}
+
 // ── Money ──────────────────────────────────────────────
+
+/** "₹1,299", "₹10.64", "$12.99" — an amount the way a title or a summary prints it. */
+export function formatMoney(amount, currency = 'INR') {
+  const value = Number(amount);
+  if (!Number.isFinite(value)) return 'an unknown amount';
+  const symbol = { INR: '₹', USD: '$', EUR: '€', GBP: '£' }[currency || 'INR'] || '';
+  // Round only where rounding is invisible. On a ₹10.64 refund it is not.
+  const text = Math.abs(value) < 100 && !Number.isInteger(value)
+    ? value.toFixed(2)
+    : Math.round(value).toLocaleString('en-IN');
+  return `${symbol}${text}`;
+}
 
 const CURRENCY_SYMBOLS = { '₹': 'INR', 'rs': 'INR', 'rs.': 'INR', 'inr': 'INR',
                            '$': 'USD', 'usd': 'USD', '€': 'EUR', 'eur': 'EUR',
@@ -358,42 +389,9 @@ export function parseTimeParts(text) {
   return { hour, minute: +m[5] };
 }
 
-/**
- * Build an ISO instant from date/time parts in a named IANA zone.
- *
- * Doing this without a date library means going through the zone twice: format
- * a guess in the target zone, measure how far off it landed, and correct. That
- * is exact for every offset, including the half-hour ones this app lives in.
- */
-export function zonedISO({ year, month, day, hour = 0, minute = 0 }, timeZone = 'Asia/Kolkata') {
-  const guess = Date.UTC(year, month, day, hour, minute, 0);
-  const offset = zoneOffsetMs(guess, timeZone);
-  const corrected = guess - offset;
-  // A second pass catches a DST boundary falling between the two instants.
-  const offset2 = zoneOffsetMs(corrected, timeZone);
-  return new Date(guess - offset2).toISOString();
-}
-
-function zoneOffsetMs(utcMs, timeZone) {
-  const dtf = new Intl.DateTimeFormat('en-US', {
-    timeZone, hour12: false,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-  });
-  const parts = Object.fromEntries(dtf.formatToParts(new Date(utcMs)).map(p => [p.type, p.value]));
-  const asUTC = Date.UTC(+parts.year, +parts.month - 1, +parts.day,
-                         +parts.hour % 24, +parts.minute, +parts.second);
-  return asUTC - utcMs;
-}
-
-/** The calendar date an instant falls on, in the user's zone. */
-export function localDateISO(instant, timeZone = 'Asia/Kolkata') {
-  const d = instant instanceof Date ? instant : new Date(instant);
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' })
-      .formatToParts(d).map(p => [p.type, p.value]));
-  return `${parts.year}-${parts.month}-${parts.day}`;
-}
+// The zone arithmetic lives in dates.js; re-exported here because the parsers
+// and the views have always taken it from this module.
+export { zonedISO, localDateISO } from './dates.js';
 
 // ── Entity helpers ─────────────────────────────────────
 

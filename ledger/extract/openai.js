@@ -17,9 +17,13 @@ import { recordUsage } from '../costs.js';
  * Returns { ok, content, usage, error }. Never throws — the deterministic
  * layers are the ledger's backbone, and a model outage should degrade the
  * result, not end the run.
+ *
+ * With `json: true` the completion is parsed and `content` is the object; a
+ * reply that is not JSON comes back as an ordinary failure, so every caller
+ * that asks for a schema gets the same error the same way.
  */
 export async function chat({
-  job, messages, responseFormat = null, model = config.llm.model,
+  job, messages, responseFormat = null, json = false, model = config.llm.model,
   reasoningEffort = config.llm.reasoningEffort,
 }) {
   if (!config.llm.enabled) return { ok: false, error: 'llm disabled', content: null, usage: null };
@@ -59,7 +63,12 @@ export async function chat({
     recordUsage({ job, model, usage, ok: Boolean(content), meta: { ms: Date.now() - startedAt } });
 
     if (!content) return { ok: false, error: 'empty completion', content: null, usage };
-    return { ok: true, content, usage, error: null };
+    if (!json) return { ok: true, content, usage, error: null };
+    try {
+      return { ok: true, content: JSON.parse(content), usage, error: null };
+    } catch {
+      return { ok: false, error: 'completion was not valid JSON', content: null, usage };
+    }
   } catch (err) {
     const error = err.name === 'AbortError' ? `timed out after ${config.llm.timeoutMs}ms` : err.message;
     // The request may well have been billed before it was abandoned.

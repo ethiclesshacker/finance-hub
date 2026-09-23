@@ -17,7 +17,11 @@
     "ledger:mcp": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/mcp.js",
     "ledger:users": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js users",
     "ledger:nutrition": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js nutrition",
-    "ledger:costs": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js costs"
+    "ledger:costs": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js costs",
+    "ledger:purge": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js purge",
+    "ledger:models": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js models",
+    "ledger:reset": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js reset",
+    "ledger:tools-manifest": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js tools-manifest"
   },
   "devDependencies": {
     "vite": "^8.1.1"

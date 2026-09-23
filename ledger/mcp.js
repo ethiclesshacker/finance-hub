@@ -17,7 +17,7 @@
 // ======================================================
 
 import { createInterface } from 'node:readline';
-import { TOOLS, runTool } from './tools.js';
+import { TOOLS, READ_ONLY_TOOLS as READ_ONLY, runTool } from './tools.js';
 
 const VERSION = '1.0.0';
 const PROTOCOL = '2025-06-18';
@@ -26,12 +26,6 @@ const PROTOCOL = '2025-06-18';
 for (const level of ['log', 'info', 'debug', 'warn']) {
   console[level] = (...args) => process.stderr.write(args.map(String).join(' ') + '\n');
 }
-
-const READ_ONLY = new Set([
-  'search_events', 'get_event', 'get_nutrition', 'list_unresolved_foods',
-  'get_daily_summary', 'get_period_summary', 'get_entity', 'search_entity_events',
-  'search_entities', 'get_stats', 'get_review_queue', 'export_ledger',
-]);
 
 // A write returns the whole event, including every source and the audit
 // trail. The model only needs enough to confirm in one line.

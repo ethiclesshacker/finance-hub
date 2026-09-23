@@ -37,6 +37,9 @@ export async function ingestEmail(options = {}) {
     });
 
     const started = Date.now();
+    // Whatever happens below, the run row gets a verdict. A crash that left it
+    // `running` forever is how the "is this thing on?" badge lied for days.
+    let outcome = null;
     try {
       const cursor = await getCheckpoint(userId, connector.sourceType, account.key);
 
@@ -76,7 +79,7 @@ export async function ingestEmail(options = {}) {
         counters.errors.push({ stage: 'connector', error: stats.warning });
       }
 
-      await finishRun(runId, {
+      outcome = {
         status: counters.errors.length ? 'partial' : 'succeeded',
         itemsSeen: counters.itemsSeen,
         eventsCreated: counters.eventsCreated,
@@ -92,16 +95,28 @@ export async function ingestEmail(options = {}) {
           by_extractor: counters.byExtractor,
           duration_ms: Date.now() - started,
         },
-      });
+      };
 
       summary.accounts.push({ account: account.key, ok: true, ...counters, connector: stats });
     } catch (err) {
-      await finishRun(runId, {
+      outcome = {
         status: 'failed',
         errors: [{ stage: 'run', error: err.message }],
         metadata: { duration_ms: Date.now() - started },
-      });
+      };
       summary.accounts.push({ account: account.key, ok: false, error: err.message });
+    } finally {
+      try {
+        await finishRun(runId, outcome || {
+          status: 'failed',
+          errors: [{ stage: 'run', error: 'the run ended without recording an outcome' }],
+          metadata: { duration_ms: Date.now() - started },
+        });
+      } catch (err) {
+        // The database is the one thing that can stop the row being closed;
+        // say so in the report rather than losing the account's result.
+        summary.accounts.push({ account: account.key, ok: false, error: `finishRun: ${err.message}` });
+      }
     }
   }
 

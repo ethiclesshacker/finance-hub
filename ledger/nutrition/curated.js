@@ -33,7 +33,7 @@
 // ======================================================
 
 /** @type {Array<{ re: RegExp, kcal: number, protein_g: number, carbs_g: number, fat_g: number, g: number, category: string }>} */
-export const CURATED = [
+const CURATED = [
   // ── Zero-calorie drinks. Definitional, not estimated: these are formulated
   //    to have no sugar, and the trap is that the name contains "Coke".
   { re: /coke zero|diet coke|coca cola zero|pepsi black/i, kcal: 1,  protein_g: 0, carbs_g: 0,  fat_g: 0, g: 300, category: 'zero_drink' },
@@ -71,7 +71,7 @@ export function curatedLookup(name) {
 //
 // This is a stopgap at the read layer. The real fix is upstream, in how
 // quick-commerce baskets are classified at ingestion.
-export const NON_FOOD = new RegExp([
+const NON_FOOD = new RegExp([
   'usb hub', 'led string light', 'wireless microphone', 'longbook', 'notebook',
   'germ protection wipes', 'condom', 'lubricant', 'softgel', 'vitamin',
   'nurokind', 'd rise', 'string light', 'adapter', 'multiport',
@@ -93,7 +93,7 @@ export const isNonFood = (name) => NON_FOOD.test(String(name || ''));
 // a chocolate bar, which the gate cannot catch because the label match is
 // genuine. Hence FRESH: it names the forms that are always made to order, and
 // it wins over any brand match.
-export const PACKAGED = new RegExp([
+const PACKAGED = new RegExp([
   "lay's", 'lays', 'snackible', 'britannia', 'amul', 'sunfeast', 'bikaji',
   'heka bites', "kwality wall", 'baskin robbins', 'cadbury', 'parle',
   'hide & seek', 'knorr', 'maggi', 'coca cola', 'thums up', 'frooti',

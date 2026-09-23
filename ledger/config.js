@@ -15,6 +15,7 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DEFAULT_TIME_ZONE } from '../src/ledger/dates.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -65,7 +66,7 @@ export const config = {
    */
   userId: () => process.env.LEDGER_USER_ID || null,
 
-  timeZone: process.env.LEDGER_TIMEZONE || 'Asia/Kolkata',
+  timeZone: process.env.LEDGER_TIMEZONE || DEFAULT_TIME_ZONE,
 
   accountsFile: process.env.LEDGER_ACCOUNTS_FILE || resolve(ROOT, 'ledger/accounts.json'),
 

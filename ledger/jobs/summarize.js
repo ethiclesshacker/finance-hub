@@ -17,7 +17,7 @@ import { chat } from '../extract/openai.js';
 import { searchEvents, getDailySummary, upsertDailySummary, upsertPeriodSummary,
          setting, resolveUserId, lifeDays } from '../db.js';
 import { buildDigest, renderDigestText, lifeSection } from '../../src/ledger/summary.js';
-import { localDateISO } from '../../src/ledger/normalize.js';
+import { dayStartISO, formatDayHeading, localDateISO, shiftISO, startOfWeek } from '../../src/ledger/dates.js';
 
 // A day fits in 120 words. A week or a month does not: at that length the
 // model kept the trips and the restaurants and dropped the energy balance,
@@ -61,7 +61,7 @@ export async function summarize(options = {}) {
 
 async function summarizePeriod(userId, timeZone, period, start, end, label) {
   const from = dayStartISO(start, timeZone);
-  const to = dayStartISO(addDays(end, 1), timeZone);
+  const to = dayStartISO(shiftISO(end, 1), timeZone);
 
   const response = await searchEvents(userId, {
     p_from: from, p_to: to, p_limit: 1000, p_ascending: true,
@@ -77,7 +77,7 @@ async function summarizePeriod(userId, timeZone, period, start, end, label) {
   } catch (error) {
     digest.body = { recorded: false, error: error.message };
   }
-  const deterministic = renderDigestText(digest, { label });
+  const deterministic = renderDigestText(digest, { label, timeZone });
 
   const { text, generatedBy } = await writeProse(deterministic, digest, label, PROSE_WORDS[period] ?? PROSE_WORDS.week);
 
@@ -143,7 +143,7 @@ async function catchUpDays(userId, timeZone, days) {
   const skipped = [];
 
   for (let i = 0; i < Math.max(days, 1); i++) {
-    const date = addDays(today, -i);
+    const date = shiftISO(today, -i);
     const existing = await getDailySummary(userId, date);
 
     if (!existing?.live_event_count) { skipped.push({ date, reason: 'no events' }); continue; }
@@ -175,7 +175,7 @@ export function resolvePeriod(period, { date = null, today, current = false } = 
 
   if (period === 'day') {
     const start = date || anchor;
-    return { start, end: start, label: formatDay(start) };
+    return { start, end: start, label: formatDayHeading(start, { long: true }) };
   }
 
   if (period === 'week') {
@@ -186,8 +186,8 @@ export function resolvePeriod(period, { date = null, today, current = false } = 
     // summary was always of an empty week, and the week that actually
     // happened was never summarised at all.
     const containing = startOfWeek(date || anchor);
-    const start = (date || current) ? containing : addDays(containing, -7);
-    return { start, end: addDays(start, 6), label: `Week of ${formatDay(start)}` };
+    const start = (date || current) ? containing : shiftISO(containing, -7);
+    return { start, end: shiftISO(start, 6), label: `Week of ${formatDayHeading(start, { long: true })}` };
   }
 
   // Same for months: run on the 1st and summarise the month that just
@@ -196,7 +196,7 @@ export function resolvePeriod(period, { date = null, today, current = false } = 
   const [y, m] = (date || anchor).split('-').map(Number);
   const target = (date || current) ? { y, m } : (m === 1 ? { y: y - 1, m: 12 } : { y, m: m - 1 });
   const start = `${target.y}-${String(target.m).padStart(2, '0')}-01`;
-  const end = toISODate(new Date(Date.UTC(target.y, target.m, 0)));
+  const end = new Date(Date.UTC(target.y, target.m, 0)).toISOString().slice(0, 10);
   return {
     start, end,
     label: new Date(Date.UTC(target.y, target.m - 1, 1))
@@ -204,31 +204,3 @@ export function resolvePeriod(period, { date = null, today, current = false } = 
   };
 }
 
-function startOfWeek(isoDate) {
-  const [y, m, d] = isoDate.split('-').map(Number);
-  const offset = (new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7;   // ISO: Monday = 0
-  return addDays(isoDate, -offset);
-}
-
-function toISODate(date) { return date.toISOString().slice(0, 10); }
-function addDays(isoDate, days) {
-  const [y, m, d] = isoDate.split('-').map(Number);
-  return toISODate(new Date(Date.UTC(y, m - 1, d + days)));
-}
-function formatDay(isoDate) {
-  const [y, m, d] = isoDate.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-IN',
-    { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
-}
-
-/** Midnight of `isoDate` in `timeZone`, as an instant. */
-function dayStartISO(isoDate, timeZone) {
-  const [y, m, d] = isoDate.split('-').map(Number);
-  const guess = Date.UTC(y, m - 1, d);
-  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
-    timeZone, hour12: false, year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-  }).formatToParts(new Date(guess)).map(p => [p.type, p.value]));
-  const asUTC = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour % 24, +parts.minute, +parts.second);
-  return new Date(guess - (asUTC - guess)).toISOString();
-}
