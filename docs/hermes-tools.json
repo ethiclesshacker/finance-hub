@@ -387,7 +387,7 @@
     "type": "function",
     "function": {
       "name": "lookup_barcode",
-      "description": "Resolve a packaged food from its barcode and remember it, so every future receipt naming that product is priced automatically. Use this when the user photographs or reads out a barcode. A barcode is an exact identifier, not a search, so the result comes from the product's printed label and is trusted accordingly — unlike a nutrition lookup by name, which is a guess. Set eaten true to also log it as a meal right now; otherwise the product is only added to the dictionary and nothing is recorded as consumed.",
+      "description": "Resolve a packaged food from its barcode and remember it, so every future receipt naming that product is priced automatically. Use this when the user photographs or reads out a barcode. A barcode is an exact identifier, not a search, so the result comes from the product's printed label and is trusted accordingly — unlike a nutrition lookup by name, which is a guess. With a photo of the packet, read the barcode, name, net weight and nutrition panel together in one look, so a miss here needs no second pass over the image. Set eaten true to also log it as a meal right now; otherwise the product is only added to the dictionary and nothing is recorded as consumed.",
       "parameters": {
         "type": "object",
         "required": [
