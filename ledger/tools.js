@@ -26,9 +26,11 @@ import { dishName, mealTitle, retitleForItems } from '../src/ledger/items.js';
 import { normalizeName, entityRef, prune } from '../src/ledger/normalize.js';
 import { dayStartISO, localDateISO, shiftISO, startOfWeek } from '../src/ledger/dates.js';
 import { summarise, bucketDays } from '../src/ledger/nutrition.js';
-import { findReference } from './nutrition/reference.js';
+import { findReference, sameDish } from './nutrition/reference.js';
 import { resolvePending, setManual, pendingItems, coverage } from './nutrition/resolve.js';
 import { lookupBarcode } from './nutrition/databases.js';
+import { curatedLookup } from './nutrition/curated.js';
+import { matchINDB } from './nutrition/indb.js';
 import { resolveSettings } from '../src/settings-schema.js';
 
 /**
@@ -463,6 +465,87 @@ export const TOOLS = {
   // it. These four tools are the whole surface: scan a package, ask what a
   // period added up to, correct a number, and see what still has none.
 
+  edit_meal_items: {
+    description:
+      'Change what is on a food event: a delivery order, a card payment at a restaurant, or a logged meal. '
+      + 'Remove dishes ("I did not have the coke"), change quantities ("only 1 paratha, not 2"; qty 0 removes), '
+      + 'add dishes, or replace the whole list. Find the event by event_id, or by `match` (restaurant, merchant, '
+      + 'title or a dish) within date_range, default today; the one nearest to now wins and the others are '
+      + 'returned so you can say which you picked. A title generated from the dishes follows them. '
+      + 'To only add dishes to the latest meal, add_meal_items is simpler.',
+    parameters: {
+      type: 'object',
+      properties: {
+        event_id: { type: 'string' },
+        match: { type: 'string', description: 'Text to find the event by, e.g. "Ownly", "pizza". Omit to take the nearest food event.' },
+        date_range: { ...DATE_RANGE, description: 'Where to look when there is no event_id. Defaults to today. ' + DATE_RANGE.description },
+        remove: { type: 'array', items: { type: 'string' }, description: 'Dish names to take off.' },
+        set_qty: {
+          type: 'array', description: 'New quantities. 0 removes the dish.',
+          items: { type: 'object', required: ['name', 'qty'], properties: { name: { type: 'string' }, qty: { type: 'integer' } } },
+        },
+        add: {
+          type: 'array', description: 'Dishes to add, or to increase if already there.',
+          items: {
+            type: 'object', required: ['name'],
+            properties: { name: { type: 'string' }, qty: { type: 'integer', default: 1 },
+                          kcal: { type: 'number', description: 'For ONE, only when stated by the user or a label.' } },
+          },
+        },
+        replace: {
+          type: 'array', description: 'The complete new list. Overrides remove, set_qty and add.',
+          items: { type: 'object', required: ['name'], properties: { name: { type: 'string' }, qty: { type: 'integer', default: 1 } } },
+        },
+      },
+    },
+    handler: async (args) => {
+      const userId = await resolveUserId();
+      const { event, others } = await findFoodEvent(args, userId);
+      const before = event.data?.items ?? [];
+
+      let items;
+      const notFound = [];
+      if (Array.isArray(args.replace)) {
+        items = await snapDishes(args.replace, userId);
+      } else {
+        items = before.map(item => ({ ...item }));
+        for (const name of args.remove ?? []) {
+          const index = items.findIndex(i => sameName(i.name, name));
+          if (index < 0) notFound.push(name); else items.splice(index, 1);
+        }
+        for (const { name, qty } of args.set_qty ?? []) {
+          const index = items.findIndex(i => sameName(i.name, name));
+          if (index < 0) { notFound.push(name); continue; }
+          if (qty > 0) items[index].qty = Math.round(qty); else items.splice(index, 1);
+        }
+        for (const item of await snapDishes(args.add ?? [], userId)) {
+          const { kcal_estimated, ...clean } = item;
+          const existing = items.find(i => sameName(i.name, clean.name));
+          if (existing) existing.qty = (existing.qty || 1) + (clean.qty || 1);
+          else items.push(clean);
+        }
+      }
+      if (notFound.length && JSON.stringify(items) === JSON.stringify(before)) {
+        throw new Error(`None of ${notFound.join(', ')} is on "${event.title}". It has: ${before.map(i => i.name).join(', ') || 'nothing'}.`);
+      }
+
+      const changes = { data: { items } };
+      const title = retitleForItems(event, items);
+      if (title) changes.title = title;
+      await rpc('ledger_update_event', { p_event_id: event.id, p_changes: changes, p_replace_data: false });
+
+      return {
+        event_id: event.id,
+        title: title ?? event.title,
+        occurred_at: event.occurred_at,
+        before: before.map(i => `${i.qty > 1 ? `${i.qty}× ` : ''}${i.name}`),
+        after: items.map(i => `${i.qty > 1 ? `${i.qty}× ` : ''}${i.name}`),
+        ...(notFound.length ? { not_found: notFound } : {}),
+        ...(others.length ? { other_matches: others } : {}),
+      };
+    },
+  },
+
   lookup_barcode: {
     description:
       'Resolve a packaged food from its barcode and remember it, so every future receipt naming that '
@@ -599,6 +682,93 @@ export const TOOLS = {
         kcal_per_eating_day: b.kcal, protein_per_eating_day: b.protein,
       }));
       return { ...summary, [by === 'week' ? 'weeks' : 'months']: buckets };
+    },
+  },
+
+  get_meal_estimate: {
+    readOnly: true,
+    description:
+      'Price a meal WITHOUT logging it: "how many calories would 2 maggi with 2 cheese slices be", '
+      + '"can I fit a pizza into today", "what is a masala dosa and a coke". Each dish is looked up in the '
+      + "user's own dish dictionary first (the numbers every logged meal is priced from, including the ones "
+      + 'he set himself), then in the curated and INDB references. Nothing is written. '
+      + 'Every item says where its number came from — say so when it is not his own verified dish. '
+      + 'Items listed under `unresolved` have NO number: give your own estimate for those, say it is yours, '
+      + 'and never fold it silently into the total. By default also returns where today stands against his '
+      + 'calorie target if he eats this. To record the meal afterwards, call log_meal.',
+    parameters: {
+      type: 'object',
+      properties: {
+        natural_language: { type: 'string', description: 'The meal as said, e.g. "2 packets maggi with 3 cheese slices".' },
+        items: {
+          type: 'array',
+          description: 'What would be eaten. Overrides the dishes read from the sentence.',
+          items: {
+            type: 'object', required: ['name'],
+            properties: {
+              name: { type: 'string' },
+              qty: { type: 'integer', default: 1, description: 'Servings as sold: packets, slices, plates.' },
+              kcal: { type: 'number', description: 'Calories for ONE, only when the user or a label stated them.' },
+            },
+          },
+        },
+        include_today: { type: 'boolean', default: true, description: 'Add what was eaten today and the calorie target.' },
+      },
+    },
+    handler: async (args) => {
+      const userId = await resolveUserId();
+      const parsed = !args.items?.length && args.natural_language
+        ? parseMealEntry(args.natural_language, { timeZone: config.timeZone })
+        : null;
+      const wanted = await snapDishes(args.items?.length ? args.items : parsed?.parsed.items ?? [], userId);
+      if (!wanted.length) throw new Error('Name at least one dish to estimate.');
+
+      const priced = [];
+      for (const item of wanted) priced.push({ item, match: await lookupDish(userId, item) });
+      const estimate = priceItems(priced);
+
+      if (args.include_today === false) return estimate;
+      return { ...estimate, today: await todayAgainstTarget(userId, estimate.kcal) };
+    },
+  },
+
+  search_foods: {
+    readOnly: true,
+    description:
+      "Look up dishes in the user's dish dictionary by name: what one serving as sold is worth in calories "
+      + 'and macros, its portion, where the number came from and whether he verified it. Use for "what do '
+      + 'we have for maggi", "how much is a cheese slice", or to find the exact spelling before '
+      + 'set_food_nutrition or merge_dishes. Nothing is written.',
+    parameters: {
+      type: 'object', required: ['query'],
+      properties: {
+        query: { type: 'string' },
+        limit: { type: 'integer', description: 'Default 10, at most 50.' },
+      },
+    },
+    handler: async (args) => {
+      const userId = await resolveUserId();
+      const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 50);
+      const rows = await rpc('food_match_item', {
+        p_name: args.query, p_threshold: 0.25, p_limit: limit, p_user_id: userId,
+      }) || [];
+      const words = normalizeName(args.query).split(' ').filter(w => w.length > 2);
+      // Trigrams miss a short word inside a long name ("maggi" in "Maggi Veg
+      // Aata Noodles" scores low), so a name that contains every word counts too.
+      const contained = words.length ? await dishesContaining(userId, words, limit) : [];
+      const seen = new Set();
+      const dishes = [...rows, ...contained]
+        .filter(r => !seen.has(r.normalized_name) && seen.add(r.normalized_name))
+        .slice(0, limit)
+        .map(dishView);
+      return {
+        query: args.query,
+        dishes,
+        ...(dishes.length ? {} : {
+          reference: referenceFor(args.query),
+          note: 'Not in his dictionary. `reference` is a generic figure, if any; get_meal_estimate uses the same.',
+        }),
+      };
     },
   },
 
@@ -955,6 +1125,87 @@ export const TOOLS = {
     },
   },
 
+  review_card_points: {
+    description:
+      'Card points rows waiting for his confirmation. First turns any new card alerts into rows, as opening the '
+      + 'Points page does, so call this rather than get_card_points when he asks "anything to confirm?". Each '
+      + 'row carries a guessed label, multiplier (points per ₹100) and work flag, taken from earlier spends at '
+      + 'the same merchant. Read them out briefly, then confirm with confirm_card_points.',
+    parameters: { type: 'object', properties: {} },
+    handler: async () => {
+      const userId = await resolveUserId();
+      const sync = await rpc('cc_sync_from_events', { p_user_id: userId });
+      const { data, error } = await db().from('cc_transactions')
+        .select('id, date, merchant, raw_merchant, amount, multiplier, points, is_work, description')
+        .eq('user_id', userId).eq('basis', 'assumed').order('date');
+      if (error) throw new Error(error.message);
+      return {
+        new_from_alerts: sync?.created ?? 0,
+        waiting: (data || []).map(r => ({
+          id: r.id, date: r.date, label: r.merchant,
+          ...(r.raw_merchant && r.raw_merchant !== r.merchant ? { bank_name: r.raw_merchant } : {}),
+          amount: Number(r.amount), multiplier: r.multiplier,
+          points: r.points ?? Math.round(Number(r.amount) * r.multiplier / 100),
+          is_work: Boolean(r.is_work),
+          ...(r.description ? { note: r.description } : {}),
+        })),
+        multipliers: '0 non-earning, 2 base, 4 select merchants, 16 partner bonus, 24 max bonus',
+      };
+    },
+  },
+
+  confirm_card_points: {
+    description:
+      'Confirm card points rows, correcting any as you go: "OnPoint was work", "Hoppr is 16x, remember that", '
+      + '"rest are fine". Pass the rows he corrected in `rows`, and all_pending=true to confirm every other '
+      + 'waiting row as it is. remember=true saves the label, multiplier and work flag for that merchant, so '
+      + 'future alerts from it arrive right. Row ids come from review_card_points.',
+    parameters: {
+      type: 'object',
+      properties: {
+        rows: {
+          type: 'array',
+          items: {
+            type: 'object', required: ['id'],
+            properties: {
+              id: { type: 'string' },
+              label: { type: 'string', description: 'Merchant name as he wants it shown.' },
+              multiplier: { type: 'integer', enum: [0, 2, 4, 16, 24] },
+              is_work: { type: 'boolean' },
+              points: { type: 'number', description: 'Only when the statement shows a different number.' },
+              note: { type: 'string' },
+              remember: { type: 'boolean', default: false },
+            },
+          },
+        },
+        all_pending: { type: 'boolean', default: false, description: 'Also confirm every other waiting row unchanged.' },
+      },
+    },
+    handler: async (args) => {
+      const userId = await resolveUserId();
+      const rows = [...(args.rows ?? [])];
+      if (args.all_pending) {
+        const { data, error } = await db().from('cc_transactions').select('id')
+          .eq('user_id', userId).eq('basis', 'assumed');
+        if (error) throw new Error(error.message);
+        for (const { id } of data || []) if (!rows.some(r => r.id === id)) rows.push({ id });
+      }
+      if (!rows.length) return { confirmed: [], note: 'Nothing was waiting.' };
+
+      const confirmed = [];
+      for (const r of rows) {
+        const row = await rpc('cc_confirm', {
+          p_id: r.id, p_label: r.label ?? null, p_multiplier: r.multiplier ?? null,
+          p_points: r.points ?? null, p_remember: Boolean(r.remember),
+          p_description: r.note ?? null, p_is_work: r.is_work ?? null, p_user_id: userId,
+        });
+        confirmed.push({ date: row.date, label: row.merchant, amount: Number(row.amount), multiplier: row.multiplier,
+                         is_work: Boolean(row.is_work), ...(r.remember ? { remembered: true } : {}) });
+      }
+      return { confirmed };
+    },
+  },
+
   get_targets: {
     readOnly: true,
     description: 'His own targets and assumptions: daily calorie target, monthly income and baseline expenses, FI multiplier and the '
@@ -1202,3 +1453,148 @@ async function latestMeal(range, userId) {
   return rpc('ledger_get_event', { p_event_id: nearest.id });
 }
 
+
+// ── Estimating a meal that has not happened ───────────
+//
+// The same ladder a logged meal is priced by, minus the model and minus every
+// write: the user's dictionary (exact name, then a spelling the reference
+// engine vouches for), then the curated table, then INDB. A dish none of them
+// knows is returned unpriced, so the assistant's guess is visibly a guess.
+
+async function lookupDish(userId, item) {
+  if (Number.isFinite(item.kcal)) return { kcal: item.kcal, from: 'stated' };
+
+  const candidates = await rpc('food_match_item', {
+    p_name: item.name, p_threshold: 0.55, p_limit: 5, p_user_id: userId,
+  }) || [];
+  for (const row of candidates) {
+    if (row.exact || sameDish(item.name, row.display_name).same) {
+      return { ...nutritionOf(row), from: row.verified ? 'your dish, verified' : `your dish (${row.source})`,
+               matched: row.display_name, verified: Boolean(row.verified), confidence: Number(row.confidence) };
+    }
+  }
+
+  const reference = referenceFor(item.name);
+  if (reference) return reference;
+  return { unresolved: true, similar: candidates.map(c => c.display_name).slice(0, 3) };
+}
+
+/** A generic figure for a dish the user has never had, or null. Local tables only. */
+function referenceFor(name) {
+  const curated = curatedLookup(name);
+  if (curated) return { ...nutritionOf(curated), from: 'curated reference', confidence: 0.8 };
+  const indb = matchINDB(name);
+  if (indb?.ok) {
+    return { ...nutritionOf(indb.row), from: `INDB: ${indb.row.source_ref?.name}`, confidence: indb.row.confidence };
+  }
+  return null;
+}
+
+const round1 = v => (Number.isFinite(Number(v)) && v !== null ? Math.round(Number(v) * 10) / 10 : null);
+
+function nutritionOf(row) {
+  return { kcal: round1(row.kcal), protein_g: round1(row.protein_g), carbs_g: round1(row.carbs_g),
+           fat_g: round1(row.fat_g), portion_g: round1(row.portion_g) };
+}
+
+function dishView(row) {
+  return { name: row.display_name, per_serving: nutritionOf(row), category: row.category ?? null,
+           source: row.source, verified: Boolean(row.verified) };
+}
+
+async function dishesContaining(userId, words, limit) {
+  let query = db().from('food_items')
+    .select('display_name, normalized_name, kcal, protein_g, carbs_g, fat_g, portion_g, category, source, verified')
+    .eq('user_id', userId).not('kcal', 'is', null);
+  for (const word of words) query = query.ilike('normalized_name', `%${word}%`);
+  const { data, error } = await query.limit(limit);
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+/**
+ * Totals for looked-up items. Pure, so the arithmetic is testable: quantities
+ * multiply per-serving values, and an unpriced item adds nothing and says so.
+ */
+export function priceItems(priced) {
+  const items = [];
+  const unresolved = [];
+  const total = { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0 };
+  for (const { item, match } of priced) {
+    const qty = item.qty || 1;
+    if (!match || match.unresolved) {
+      unresolved.push({ name: item.name, qty, similar_dishes: match?.similar ?? [] });
+      continue;
+    }
+    const line = { name: item.name, qty, kcal_each: match.kcal, kcal: round1(match.kcal * qty), from: match.from };
+    for (const key of ['protein_g', 'carbs_g', 'fat_g']) {
+      if (match[key] !== null && match[key] !== undefined) {
+        line[key] = round1(match[key] * qty);
+        total[key] += match[key] * qty;
+      }
+    }
+    if (match.portion_g) line.portion_g_each = match.portion_g;
+    if (match.matched && match.matched !== item.name) line.matched_dish = match.matched;
+    total.kcal += match.kcal * qty;
+    items.push(line);
+  }
+  return {
+    kcal: Math.round(total.kcal),
+    protein_g: Math.round(total.protein_g),
+    carbs_g: Math.round(total.carbs_g),
+    fat_g: Math.round(total.fat_g),
+    items,
+    unresolved,
+    complete: unresolved.length === 0,
+    ...(unresolved.length ? { caveat: `${unresolved.length} item(s) have no number; the total leaves them out.` } : {}),
+  };
+}
+
+async function todayAgainstTarget(userId, mealKcal) {
+  const { from, to } = resolveRange('today');
+  const [meals, stored] = await Promise.all([
+    rpc('food_event_nutrition', { p_from: from, p_to: to, p_limit: 200, p_user_id: userId }),
+    rpc('finance_settings', { p_user_id: userId }),
+  ]);
+  const eaten = Math.round((meals || []).reduce((sum, m) => sum + (Number(m.kcal) || 0), 0));
+  const unpriced = (meals || []).filter(m => m.kcal === null || m.kcal === undefined).length;
+  const target = Number(resolveSettings(stored || {}).food_kcal_target.value);
+  const after = eaten + mealKcal;
+  return {
+    eaten_so_far_kcal: eaten,
+    meals_logged: (meals || []).length,
+    ...(unpriced ? { meals_unpriced: unpriced } : {}),
+    target_kcal: target,
+    after_this_meal_kcal: after,
+    remaining_after_kcal: target - after,
+  };
+}
+
+
+/**
+ * The food event a correction is about: by id, or the one nearest to now in
+ * the range whose title, place or dishes mention `match`.
+ */
+async function findFoodEvent(args, userId) {
+  if (args.event_id) {
+    const event = await rpc('ledger_get_event', { p_event_id: args.event_id });
+    if (!event) throw new Error('No event with that id.');
+    return { event, others: [] };
+  }
+  const { from, to } = resolveRange(args.date_range ?? 'today');
+  const result = await searchEvents(userId, { p_types: ['food'], p_from: from, p_to: to, p_limit: 100 });
+  const needle = normalizeName(args.match ?? '');
+  const hits = (result?.events || []).filter(e => e.status !== 'dismissed' && (!needle || normalizeName([
+    e.title, e.data?.restaurant, e.data?.merchant, ...(e.data?.items ?? []).map(i => i.name),
+  ].filter(Boolean).join(' ')).includes(needle)));
+  if (!hits.length) {
+    throw new Error(`No food event${args.match ? ` mentioning "${args.match}"` : ''} in that range. Widen date_range or pass event_id.`);
+  }
+  const now = Date.now();
+  hits.sort((a, b) => Math.abs(new Date(a.occurred_at) - now) - Math.abs(new Date(b.occurred_at) - now));
+  const event = await rpc('ledger_get_event', { p_event_id: hits[0].id });
+  return {
+    event,
+    others: hits.slice(1, 4).map(e => ({ event_id: e.id, title: e.title, occurred_at: e.occurred_at })),
+  };
+}

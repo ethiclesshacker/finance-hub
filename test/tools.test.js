@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { TOOLS, TOOL_SPECS, READ_ONLY_TOOLS, resolveRange, resolveDays } from '../ledger/tools.js';
+import { TOOLS, TOOL_SPECS, READ_ONLY_TOOLS, resolveRange, resolveDays, priceItems } from '../ledger/tools.js';
 import { dayStartISO, localDateISO, shiftISO, startOfWeek } from '../src/ledger/dates.js';
 
 const IST = 'Asia/Kolkata';
@@ -89,4 +89,33 @@ test('the day-ranged health tools carry their range default in the schema', () =
   assert.deepEqual(TOOLS.get_health_metric.parameters.required, ['type']);
   assert.ok(TOOLS.get_health_metric.parameters.properties.type);
   assert.equal(TOOLS.get_sleep.parameters.required, undefined);
+});
+
+test('priceItems multiplies servings and never prices what it could not find', () => {
+  const out = priceItems([
+    { item: { name: 'Maggi', qty: 2 }, match: { kcal: 269, protein_g: 5.7, carbs_g: 41.7, fat_g: 8.8, portion_g: 70, from: 'your dish, verified' } },
+    { item: { name: 'Cheese Slice', qty: 2 }, match: { kcal: 62, protein_g: 4, carbs_g: 0.3, fat_g: 5, from: 'your dish, verified' } },
+    { item: { name: 'Mystery Bowl', qty: 1 }, match: { unresolved: true, similar: ['Poke Bowl'] } },
+  ]);
+  assert.equal(out.kcal, 662);
+  assert.equal(out.protein_g, 19);
+  assert.equal(out.items[0].kcal, 538);
+  assert.equal(out.items[0].portion_g_each, 70);
+  assert.equal(out.complete, false);
+  assert.deepEqual(out.unresolved, [{ name: 'Mystery Bowl', qty: 1, similar_dishes: ['Poke Bowl'] }]);
+  assert.match(out.caveat, /1 item/);
+});
+
+test('a stated zero is a price, not a gap', () => {
+  const out = priceItems([{ item: { name: 'Coke Zero', qty: 3 }, match: { kcal: 0, from: 'stated' } }]);
+  assert.equal(out.kcal, 0);
+  assert.equal(out.complete, true);
+});
+
+test('the new write tools are not marked read-only', () => {
+  for (const name of ['edit_meal_items', 'review_card_points', 'confirm_card_points']) {
+    assert.ok(TOOLS[name], name);
+    assert.equal(READ_ONLY_TOOLS.has(name), false, name);
+  }
+  for (const name of ['get_meal_estimate', 'search_foods']) assert.ok(READ_ONLY_TOOLS.has(name), name);
 });

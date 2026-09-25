@@ -256,10 +256,23 @@ export async function setManual(userId, displayName, fields) {
   const normalized = normalizeName(displayName);
   if (!normalized) throw new Error(`"${displayName}" normalizes to nothing`);
 
-  const result = await upsert(uid, displayName, {
-    ...fields, source: 'manual', confidence: 1,
-    source_ref: { entered_by: 'human', at: new Date().toISOString() },
+  const sourceRef = { entered_by: 'human', at: new Date().toISOString() };
+  let result = await upsert(uid, displayName, {
+    ...fields, source: 'manual', confidence: 1, source_ref: sourceRef,
   });
+
+  // The upsert refuses to touch a verified row — right for every automatic
+  // rung, wrong for the person who verified it. A correction ("a slice is 62,
+  // not 311") has to land, so it is written directly, as the Dishes page does.
+  if (result?.action === 'kept_verified' || result?.action === 'kept_stronger') {
+    const patch = Object.fromEntries(Object.entries(fields)
+      .filter(([, value]) => value !== undefined && value !== null));
+    const { error } = await db().from('food_items')
+      .update({ ...patch, source: 'manual', confidence: 1, source_ref: sourceRef, updated_at: new Date().toISOString() })
+      .eq('user_id', uid).eq('normalized_name', normalized);
+    if (error) throw new Error(`could not correct "${displayName}": ${error.message}`);
+    result = { ...result, action: 'corrected' };
+  }
 
   // The upsert keeps a verified row untouched, so verification is a separate
   // write — otherwise the first manual edit would lock out the second.
