@@ -16,7 +16,7 @@
 import { Chart } from '../vendor.js';
 import * as api from '../ledger/api.js';
 import { mealMeta, mealSlot, sourceMeta } from '../ledger/taxonomy.js';
-import { summariseItems } from '../ledger/items.js';
+import { summariseItems, mealTitle, retitleForItems } from '../ledger/items.js';
 import {
   indexDictionary, eventNutrition, summarise, bucketDays, dishNutrition, SOURCE_LABEL,
 } from '../ledger/nutrition.js';
@@ -654,7 +654,11 @@ function openBasket(event) {
       else {
         // `items` is the only key sent, and the update merges by key, so every
         // other fact the receipt stated is left exactly as it was.
-        await api.updateEvent(event.id, { data: { items: draft } });
+        const changes = { data: { items: draft } };
+        // A title generated from the dishes follows them; a chosen one stays.
+        const title = retitleForItems(event, draft);
+        if (title) changes.title = title;
+        await api.updateEvent(event.id, changes);
         showToast(draft.length ? 'Saved.' : 'Cleared.');
       }
       closeModal();
@@ -678,7 +682,7 @@ function openBasket(event) {
       subtype: 'meal',
       // The place if there was one, otherwise the food itself: "Idli, Vada" is
       // a better line in a timeline than "Meal".
-      title: place || summariseItems(draft, 3) || 'Meal',
+      title: mealTitle(place, draft),
       data: prune({ restaurant: place || null, items: draft }),
       status: 'confirmed',
     }, place ? [entityRef('restaurant', place, 'restaurant')].filter(Boolean) : [], {
