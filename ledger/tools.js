@@ -552,6 +552,8 @@ export const TOOLS = {
       + 'product is priced automatically. Use this when the user photographs or reads out a barcode. '
       + 'A barcode is an exact identifier, not a search, so the result comes from the product\'s printed '
       + 'label and is trusted accordingly — unlike a nutrition lookup by name, which is a guess. '
+      + 'With a photo of the packet, read the barcode, name, net weight and nutrition panel together in one '
+      + 'look, so a miss here needs no second pass over the image. '
       + 'Set eaten true to also log it as a meal right now; otherwise the product is only added to the '
       + 'dictionary and nothing is recorded as consumed.',
     parameters: {
@@ -575,7 +577,12 @@ export const TOOLS = {
           ok: false, barcode: String(args.barcode).replace(/\D/g, ''),
           reason: found.error, not_found: Boolean(found.notFound),
           next: found.notFound
-            ? 'Not in the database. Ask for the name and the per-100g panel on the packet, then call set_food_nutrition.'
+            // Most Indian packs are not in Open Food Facts and a web search for
+            // the digits finds unrelated products, so the label is the source.
+            ? 'Not in Open Food Facts. Do NOT web-search the barcode: nothing else indexes these packs. '
+              + 'If he sent a photo of the packet, read the product name, net weight and the per-100g panel '
+              + 'from it in ONE look, then set_food_nutrition per packet as sold (portion_g = net weight) '
+              + 'and, if he ate it, log_meal with that dish. With no photo, ask for the name and the panel.'
             : 'Lookup failed. Try again, or ask for the label values and call set_food_nutrition.',
         };
       }
