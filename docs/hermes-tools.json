@@ -295,6 +295,97 @@
   {
     "type": "function",
     "function": {
+      "name": "edit_meal_items",
+      "description": "Change what is on a food event: a delivery order, a card payment at a restaurant, or a logged meal. Remove dishes (\"I did not have the coke\"), change quantities (\"only 1 paratha, not 2\"; qty 0 removes), add dishes, or replace the whole list. Find the event by event_id, or by `match` (restaurant, merchant, title or a dish) within date_range, default today; the one nearest to now wins and the others are returned so you can say which you picked. A title generated from the dishes follows them. To only add dishes to the latest meal, add_meal_items is simpler.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "match": {
+            "type": "string",
+            "description": "Text to find the event by, e.g. \"Ownly\", \"pizza\". Omit to take the nearest food event."
+          },
+          "date_range": {
+            "type": "string",
+            "description": "Where to look when there is no event_id. Defaults to today. today, yesterday, this week, last week, this month, last month, this year, \"last N days\", a single YYYY-MM-DD, or an explicit span \"YYYY-MM-DD..YYYY-MM-DD\"."
+          },
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Dish names to take off."
+          },
+          "set_qty": {
+            "type": "array",
+            "description": "New quantities. 0 removes the dish.",
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "qty"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "qty": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "add": {
+            "type": "array",
+            "description": "Dishes to add, or to increase if already there.",
+            "items": {
+              "type": "object",
+              "required": [
+                "name"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "qty": {
+                  "type": "integer",
+                  "default": 1
+                },
+                "kcal": {
+                  "type": "number",
+                  "description": "For ONE, only when stated by the user or a label."
+                }
+              }
+            }
+          },
+          "replace": {
+            "type": "array",
+            "description": "The complete new list. Overrides remove, set_qty and add.",
+            "items": {
+              "type": "object",
+              "required": [
+                "name"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "qty": {
+                  "type": "integer",
+                  "default": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
       "name": "lookup_barcode",
       "description": "Resolve a packaged food from its barcode and remember it, so every future receipt naming that product is priced automatically. Use this when the user photographs or reads out a barcode. A barcode is an exact identifier, not a search, so the result comes from the product's printed label and is trusted accordingly — unlike a nutrition lookup by name, which is a guess. Set eaten true to also log it as a meal right now; otherwise the product is only added to the dictionary and nothing is recorded as consumed.",
       "parameters": {
@@ -348,6 +439,73 @@
               "month"
             ],
             "description": "Break the period down. Default total."
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_meal_estimate",
+      "description": "Price a meal WITHOUT logging it: \"how many calories would 2 maggi with 2 cheese slices be\", \"can I fit a pizza into today\", \"what is a masala dosa and a coke\". Each dish is looked up in the user's own dish dictionary first (the numbers every logged meal is priced from, including the ones he set himself), then in the curated and INDB references. Nothing is written. Every item says where its number came from — say so when it is not his own verified dish. Items listed under `unresolved` have NO number: give your own estimate for those, say it is yours, and never fold it silently into the total. By default also returns where today stands against his calorie target if he eats this. To record the meal afterwards, call log_meal.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "natural_language": {
+            "type": "string",
+            "description": "The meal as said, e.g. \"2 packets maggi with 3 cheese slices\"."
+          },
+          "items": {
+            "type": "array",
+            "description": "What would be eaten. Overrides the dishes read from the sentence.",
+            "items": {
+              "type": "object",
+              "required": [
+                "name"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "qty": {
+                  "type": "integer",
+                  "default": 1,
+                  "description": "Servings as sold: packets, slices, plates."
+                },
+                "kcal": {
+                  "type": "number",
+                  "description": "Calories for ONE, only when the user or a label stated them."
+                }
+              }
+            }
+          },
+          "include_today": {
+            "type": "boolean",
+            "default": true,
+            "description": "Add what was eaten today and the calorie target."
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "search_foods",
+      "description": "Look up dishes in the user's dish dictionary by name: what one serving as sold is worth in calories and macros, its portion, where the number came from and whether he verified it. Use for \"what do we have for maggi\", \"how much is a cheese slice\", or to find the exact spelling before set_food_nutrition or merge_dishes. Nothing is written.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Default 10, at most 50."
           }
         }
       }
@@ -706,6 +864,76 @@
           "date_range": {
             "type": "string",
             "description": "today, yesterday, this week, last week, this month, last month, this year, \"last N days\", a single YYYY-MM-DD, or an explicit span \"YYYY-MM-DD..YYYY-MM-DD\"."
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "review_card_points",
+      "description": "Card points rows waiting for his confirmation. First turns any new card alerts into rows, as opening the Points page does, so call this rather than get_card_points when he asks \"anything to confirm?\". Each row carries a guessed label, multiplier (points per ₹100) and work flag, taken from earlier spends at the same merchant. Read them out briefly, then confirm with confirm_card_points.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "confirm_card_points",
+      "description": "Confirm card points rows, correcting any as you go: \"OnPoint was work\", \"Hoppr is 16x, remember that\", \"rest are fine\". Pass the rows he corrected in `rows`, and all_pending=true to confirm every other waiting row as it is. remember=true saves the label, multiplier and work flag for that merchant, so future alerts from it arrive right. Row ids come from review_card_points.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string",
+                  "description": "Merchant name as he wants it shown."
+                },
+                "multiplier": {
+                  "type": "integer",
+                  "enum": [
+                    0,
+                    2,
+                    4,
+                    16,
+                    24
+                  ]
+                },
+                "is_work": {
+                  "type": "boolean"
+                },
+                "points": {
+                  "type": "number",
+                  "description": "Only when the statement shows a different number."
+                },
+                "note": {
+                  "type": "string"
+                },
+                "remember": {
+                  "type": "boolean",
+                  "default": false
+                }
+              }
+            }
+          },
+          "all_pending": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also confirm every other waiting row unchanged."
           }
         }
       }
