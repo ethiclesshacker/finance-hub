@@ -24,7 +24,7 @@ import {
   triage, extractJsonLd, fromSchemaOrg, parseICS, fromICS, icsToISO,
   extractDeterministic, senderFingerprint, htmlToText, withKeys, isSelfPayee,
 } from '../src/ledger/email.js';
-import { parseOrderItems, summariseItems, dishName } from '../src/ledger/items.js';
+import { parseOrderItems, summariseItems, dishName, mealTitle, retitleForItems } from '../src/ledger/items.js';
 import { mealSlot } from '../src/ledger/taxonomy.js';
 import { parseQuickEntry, parseMealEntry, parseMealItems } from '../src/ledger/nlparse.js';
 import { buildDigest, isInflow } from '../src/ledger/summary.js';
@@ -1312,4 +1312,39 @@ test('buildDigest no longer reports a self-transfer or a card bill as money in',
   ], { timeZone: 'Asia/Kolkata' });
   assert.equal(digest.inflow.total, 90000);
   assert.equal(digest.spend.total, 3500);
+});
+
+// A meal logged as pasta and cheese to see the calories, emptied, then given a
+// Diet Coke, went on reading "Pasta, Cheese Slice" everywhere it was listed.
+test('a generated meal title follows the items through every edit', () => {
+  const pasta = { name: 'Sunfeast YiPPee! 100% Suji Masala Pasta Treat', qty: 1 };
+  const cheese = { name: 'Cheese Slice', qty: 1 };
+  const coke = { name: 'Diet Coke', qty: 1 };
+
+  let event = { type: 'food', title: mealTitle(null, [pasta, cheese]), data: { items: [pasta, cheese] } };
+  const cleared = retitleForItems(event, []);
+  assert.equal(cleared, 'Meal');
+
+  event = { ...event, title: cleared, data: { items: [] } };
+  assert.equal(retitleForItems(event, [coke]), 'Diet Coke');
+
+  // Adding to a meal lengthens its title too.
+  const dosa = { type: 'food', title: 'Masala Dosa', data: { items: [{ name: 'Masala Dosa', qty: 1 }] } };
+  assert.equal(retitleForItems(dosa, [{ name: 'Masala Dosa', qty: 1 }, coke]), 'Masala Dosa, Diet Coke');
+});
+
+test('a title somebody chose survives an edit to the items', () => {
+  const coke = [{ name: 'Diet Coke', qty: 1 }];
+  // A receipt's title.
+  assert.equal(retitleForItems({ type: 'food', title: 'Ownly — ₹147', data: { items: [{ name: 'Dosa' }] } }, coke), null);
+  // Typed by hand.
+  assert.equal(retitleForItems({ type: 'food', title: 'Maggi 2 packet + Cheese slice 3pc',
+    data: { items: [{ name: 'Maggi', qty: 2 }] } }, coke), null);
+  // Named for the place: the place is still the title.
+  assert.equal(retitleForItems({ type: 'food', title: 'Veena Stores',
+    data: { restaurant: 'Veena Stores', items: [{ name: 'Idli' }] } }, coke), null);
+  // Not a meal at all.
+  assert.equal(retitleForItems({ type: 'purchase', title: 'Idli', data: { items: [{ name: 'Idli' }] } }, coke), null);
+  // Unchanged items, unchanged title.
+  assert.equal(retitleForItems({ type: 'food', title: 'Diet Coke', data: { items: coke } }, coke), null);
 });

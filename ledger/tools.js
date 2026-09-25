@@ -22,7 +22,7 @@
 import { config } from './config.js';
 import { db, rpc, resolveUserId, searchEvents } from './db.js';
 import { parseQuickEntry, parseMealEntry } from '../src/ledger/nlparse.js';
-import { dishName, summariseItems } from '../src/ledger/items.js';
+import { dishName, mealTitle, retitleForItems } from '../src/ledger/items.js';
 import { normalizeName, entityRef, prune } from '../src/ledger/normalize.js';
 import { dayStartISO, localDateISO, shiftISO, startOfWeek } from '../src/ledger/dates.js';
 import { summarise, bucketDays } from '../src/ledger/nutrition.js';
@@ -248,9 +248,19 @@ export const TOOLS = {
         replace_data: { type: 'boolean', default: false, description: 'True replaces data wholesale instead of merging.' },
       },
     },
-    handler: args => rpc('ledger_update_event', {
-      p_event_id: args.event_id, p_changes: args.changes, p_replace_data: Boolean(args.replace_data),
-    }),
+    handler: async (args) => {
+      const changes = { ...args.changes };
+      // New items and no new title: a title generated from the old items
+      // would otherwise go on naming dishes that are no longer there.
+      if (Array.isArray(changes.data?.items) && !('title' in changes)) {
+        const event = await rpc('ledger_get_event', { p_event_id: args.event_id });
+        const title = retitleForItems(event, changes.data.items);
+        if (title) changes.title = title;
+      }
+      return rpc('ledger_update_event', {
+        p_event_id: args.event_id, p_changes: changes, p_replace_data: Boolean(args.replace_data),
+      });
+    },
   },
 
   delete_or_dismiss_event: {
@@ -345,7 +355,7 @@ export const TOOLS = {
           occurred_at: occurredAt,
           type: 'food',
           subtype: 'meal',
-          title: place || summariseItems(items, 3) || 'Meal',
+          title: mealTitle(place, items),
           description: args.natural_language ?? null,
           data,
           inference: parsed?.event.inference ?? {},
@@ -433,6 +443,8 @@ export const TOOLS = {
       }
 
       const changes = { data: { items: merged } };
+      const title = retitleForItems(event, merged);
+      if (title) changes.title = title;
       // A plan with a plate on it is not a plan any more.
       if (event.status === 'scheduled') changes.status = 'confirmed';
 

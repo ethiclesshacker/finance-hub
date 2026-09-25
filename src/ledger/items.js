@@ -259,3 +259,28 @@ export function summariseItems(items, limit = 2) {
   const rest = list.length - shown.length;
   return rest > 0 ? `${shown.join(', ')} +${rest} more` : shown.join(', ');
 }
+
+/**
+ * The title a meal is given when nobody typed one: the place, else the food.
+ * Every writer of a meal (the Food page, log_meal, the quick-entry parser)
+ * names it this way, so a title equal to this is known to be generated.
+ */
+export function mealTitle(place, items) {
+  return place || summariseItems(items, 3) || 'Meal';
+}
+
+/**
+ * The title a meal should carry after its items change, or null to leave it.
+ *
+ * A title generated from the basket has to follow the basket, or a meal edited
+ * down to one Diet Coke still reads "Pasta, Cheese Slice" in the timeline and
+ * in every summary. A title somebody chose — a receipt's, a hand-typed one —
+ * does not equal what would have been generated, and is never touched.
+ */
+export function retitleForItems(event, nextItems) {
+  if (!event || event.type !== 'food') return null;
+  const place = event.data?.restaurant || null;
+  if (event.title !== mealTitle(place, event.data?.items)) return null;
+  const next = mealTitle(place, nextItems);
+  return next === event.title ? null : next;
+}
