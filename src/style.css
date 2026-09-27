@@ -1169,121 +1169,101 @@ input, select, textarea {
    pushing the card — and the page — wider than the screen. */
 @media (max-width: 720px) {
   .table-inner { padding-inline: 0; }
-  .table-inner > .gridjs-container { padding-inline: var(--sp-4); }
+  .table-inner > .dt { padding-inline: var(--sp-4); }
 }
 
-/* ---------- Grid.js ----------
-   The library ships a light theme and its own layout assumptions, so this
-   block does two jobs: repaint it, and make it behave as a block that
-   scrolls inside its card. The table is the one element allowed to be wider
-   than the viewport, and .gridjs-wrapper is where that width is absorbed.
+/* ---------- Data tables (src/table.js) ----------
+   The table is the one element allowed to be wider than the viewport, and
+   .dt-scroll is where that width is absorbed.
    ---------------------------------------------------------------- */
-.gridjs-container {
-  color: var(--text-primary) !important;
-  background: transparent !important;
-  min-width: 0 !important;
-  padding: 0 !important;
-}
-.gridjs-wrapper {
-  border: none !important;
-  border-radius: 0 !important;
+.dt { min-width: 0; color: var(--text-primary); }
+.dt-scroll {
   /* The only horizontal scroller in the app. */
-  overflow-x: auto !important;
-  overflow-y: hidden !important;
-  box-shadow: none !important;
+  overflow-x: auto;
+  overflow-y: hidden;
   overscroll-behavior-x: contain;
   /* A shadow that only appears on the edge you can still scroll towards, so a
-     table wider than the screen says so instead of silently hiding columns.
-     Two local-attachment layers pinned to the content and two scroll-attached
-     covers pinned to the viewport of the scroller. */
+     table wider than the screen says so instead of silently hiding columns. */
   background:
     linear-gradient(to right, var(--bg-card) 30%, rgba(22, 32, 50, 0)) left / 2.5rem 100% no-repeat local,
     linear-gradient(to left,  var(--bg-card) 30%, rgba(22, 32, 50, 0)) right / 2.5rem 100% no-repeat local,
     radial-gradient(farthest-side at 0 50%, rgba(0,0,0,0.45), rgba(0,0,0,0)) left / 1rem 100% no-repeat scroll,
     radial-gradient(farthest-side at 100% 50%, rgba(0,0,0,0.45), rgba(0,0,0,0)) right / 1rem 100% no-repeat scroll,
-    var(--bg-card) !important;
+    var(--bg-card);
 }
-.gridjs-table {
-  width: 100% !important;
-  background: transparent !important;
-  border-collapse: collapse !important;
+.dt-table {
+  width: 100%;
+  border-collapse: collapse;
   /* Figures line up down a column only if the digits are the same width. */
   font-variant-numeric: tabular-nums;
 }
-.gridjs-thead { background: transparent !important; }
-.gridjs-thead th.gridjs-th {
-  background: var(--bg-elevated) !important;
-  color: var(--text-secondary) !important;
-  font-size: var(--fs-xs) !important;
-  font-weight: 700 !important;
-  text-transform: uppercase !important;
-  letter-spacing: 0.06em !important;
-  border-bottom: 1px solid var(--border) !important;
-  border-top: none !important;
-  border-left: none !important;
-  border-right: none !important;
-  padding: var(--sp-3) var(--sp-4) !important;
-  white-space: nowrap !important;
-  vertical-align: middle !important;
+.dt-table th {
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  padding: var(--sp-2) var(--sp-4);
+  white-space: nowrap;
+  vertical-align: middle;
 }
-/* Grid.js gives the label a fixed-width flex child and the sort arrows the
-   rest, which truncated every header it was applied to — "Date" measured 52px
-   of text inside 37px of box. The label takes the space it needs; the arrows
-   sit after it. */
-.gridjs-th .gridjs-th-content {
-  width: auto !important;
-  flex: 0 1 auto !important;
-  overflow: visible !important;
-  text-overflow: clip !important;
+/* The whole header is the sort control: a 36px-tall target, not a 12px arrow. */
+.dt-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--control-h);
+  margin: 0 calc(-1 * var(--sp-2));
+  padding: 0 var(--sp-2);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
 }
-.gridjs-th-sort { cursor: pointer; }
-/* A 36px hit area around a 12px glyph — the button was 13x24 before, and
-   the arrows are a hint, not the point of the header. */
-.gridjs-th-sort button.gridjs-sort {
-  width: var(--control-h) !important;
-  height: var(--control-h) !important;
-  background-position: center !important;
-  background-size: 12px 12px !important;
-  opacity: 0.5;
-  flex-shrink: 0;
-}
-.gridjs-th-sort:hover button.gridjs-sort,
-.gridjs-th-sort button.gridjs-sort:focus-visible { opacity: 1; }
-.gridjs-tbody { background: transparent !important; }
-.gridjs-tbody .gridjs-tr {
-  background: transparent !important;
-  border-bottom: 1px solid var(--border) !important;
-}
-.gridjs-tbody .gridjs-tr:last-child { border-bottom: none !important; }
-.gridjs-td {
-  background: transparent !important;
-  color: var(--text-secondary) !important;
-  font-size: var(--fs-sm) !important;
-  border: none !important;
-  padding: var(--sp-3) var(--sp-4) !important;
-  vertical-align: middle !important;
+.dt-sort i { opacity: 0.4; font-size: 0.9em; }
+.dt-sort:hover { color: var(--text-primary); }
+.dt-sort:hover i, .dt-sort:focus-visible i { opacity: 1; }
+.dt-sort.is-active { color: var(--accent); }
+.dt-sort.is-active i { opacity: 1; }
+.dt-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Right-aligned columns put the label hard against the digits it names. */
+.dt-table th[data-align="end"] { text-align: right; }
+.dt-table th[data-align="end"] .dt-sort { flex-direction: row-reverse; margin: 0 calc(-1 * var(--sp-2)) 0 0; }
+
+.dt-table td {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
   white-space: nowrap;
 }
-.gridjs-tr:hover .gridjs-td { background: var(--bg-hover) !important; }
+.dt-table tbody tr:last-child td { border-bottom: none; }
+.dt-table tbody tr:hover td { background: var(--bg-hover); }
+.dt-table td[data-align="end"] { text-align: right; }
+.dt-table td .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dt-table td.dt-empty {
+  color: var(--text-muted);
+  font-size: var(--fs-base);
+  text-align: center;
+  padding: var(--sp-8) var(--sp-4);
+  white-space: normal;
+}
+.dt-table tbody tr:hover td.dt-empty { background: transparent; }
 
-/* Money and counts are read by comparing them down the column, which only
-   works right-aligned with digits of equal width. The views tag those columns
-   `is-numeric`, which Grid.js puts on the header cell and every body cell. */
-.gridjs-th[data-align="end"],
-.gridjs-td[data-align="end"] { text-align: right !important; }
-/* Grid.js lays the header out as flex. Reversing it puts the label hard
-   against the right edge, directly above the digits it names, with the sort
-   arrows on its far side. */
-.gridjs-th[data-align="end"] { flex-direction: row-reverse; }
-.gridjs-th[data-align="end"] > div { display: flex; flex-direction: row-reverse; align-items: center; }
-.gridjs-td .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .row-actions {
   display: inline-flex;
   gap: var(--sp-2);
   justify-content: flex-end;
 }
-/* The row actions were 45x29 pill buttons holding a single icon. Same size
-   and shape as every other icon-only control now. */
+/* Same size and shape as every other icon-only control. */
 .row-actions .btn-icon { font-size: var(--fs-xs); }
 .btn-icon.is-danger { color: var(--danger); }
 .btn-icon.is-danger:hover {
@@ -1292,56 +1272,62 @@ input, select, textarea {
   border-color: var(--danger-glow);
 }
 
-.gridjs-footer {
-  background: var(--bg-elevated) !important;
-  border-top: 1px solid var(--border) !important;
-  padding: var(--sp-2) var(--sp-3) !important;
+.dt-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2) var(--sp-4);
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
 }
-.gridjs-pagination { color: var(--text-secondary) !important; font-size: var(--fs-sm) !important; }
-.gridjs-pagination .gridjs-pages { display: flex; gap: 2px; }
-.gridjs-pagination .gridjs-pages button {
-  min-width: var(--control-h) !important;
-  min-height: var(--control-h) !important;
-  background: transparent !important;
-  color: var(--text-secondary) !important;
-  border: 1px solid var(--border) !important;
-  border-radius: var(--radius-sm) !important;
-  padding: 0 var(--sp-2) !important;
-  font-size: var(--fs-sm) !important;
-  cursor: pointer !important;
+.dt-size { display: flex; align-items: center; gap: var(--sp-4); }
+.dt-size label, .dt-goto { display: inline-flex; align-items: center; gap: var(--sp-2); white-space: nowrap; }
+.dt-size-select { width: auto; min-height: var(--control-h); padding-block: 0; }
+.dt-range { color: var(--text-muted); }
+.dt-pager { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
+.dt-pages { display: inline-flex; align-items: center; gap: 2px; }
+.dt-page {
+  min-width: var(--control-h);
+  min-height: var(--control-h);
+  padding: 0 var(--sp-2);
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  cursor: pointer;
 }
-.gridjs-pagination .gridjs-pages button:hover {
-  border-color: var(--accent) !important;
-  color: var(--accent) !important;
-  background: transparent !important;
+.dt-page:hover:not([disabled]) { border-color: var(--accent); color: var(--accent); }
+.dt-page:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.dt-page.is-current {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-dark);
+  font-weight: 700;
 }
-.gridjs-pagination .gridjs-pages button.gridjs-currentPage {
-  background: var(--accent) !important;
-  border-color: var(--accent) !important;
-  color: var(--bg-dark) !important;
-  font-weight: 700 !important;
+.dt-page[disabled] { opacity: 0.4; cursor: default; }
+.dt-gap { min-width: 1.25rem; text-align: center; color: var(--text-muted); }
+.dt-goto { margin-left: var(--sp-3); }
+.dt-goto-input {
+  width: 4.5rem;
+  min-height: var(--control-h);
+  padding-block: 0;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
-.gridjs-pagination button[disabled] { opacity: 0.45 !important; }
-.gridjs-summary { color: var(--text-muted) !important; font-size: var(--fs-xs) !important; }
-.gridjs-notfound, .gridjs-loading {
-  color: var(--text-muted) !important;
-  font-size: var(--fs-base) !important;
-  background: transparent !important;
-}
-.gridjs-search-input { display: none !important; }
-.gridjs-th-sort.gridjs-th-sort-asc .gridjs-icon,
-.gridjs-th-sort.gridjs-th-sort-desc .gridjs-icon { fill: var(--accent) !important; }
 
-/* At phone width the footer's two halves stack rather than overlapping. */
+/* At phone width the footer's halves stack, and the page numbers give way
+   to first / previous / next / last and the page box. */
 @media (max-width: 560px) {
-  .gridjs-footer { padding: var(--sp-3) var(--sp-4) !important; }
-  .gridjs-pagination {
-    display: flex !important;
-    flex-direction: column;
-    align-items: stretch;
-    gap: var(--sp-2);
-  }
-  .gridjs-pagination .gridjs-pages { justify-content: flex-start; flex-wrap: wrap; }
+  .dt-footer { flex-direction: column; align-items: stretch; padding: var(--sp-3) var(--sp-4); }
+  .dt-size { justify-content: space-between; }
+  .dt-pages { display: none; }
+  .dt-pager { justify-content: space-between; }
+  .dt-goto { margin-left: 0; }
 }
 
 

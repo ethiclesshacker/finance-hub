@@ -1,4 +1,4 @@
-import { Chart, Grid } from './vendor.js';
+import { Chart } from './vendor.js';
 
 // ======================================================
 // Formatting utilities
@@ -398,42 +398,6 @@ export function bannerHTML({ tone = 'error', title = '', sub = '', action = null
       </div>
       ${action ? `<button type="button" class="btn-sm ${action.ghost ? 'btn-ghost' : 'btn-accent'}" id="${escapeHTML(action.id)}">${escapeHTML(action.label)}</button>` : ''}
     </div>`;
-}
-
-// ======================================================
-// Grid.js tables
-// ======================================================
-
-// Applied to both the header and the body cells of a column, so a numeric
-// column is right-aligned end to end. A data attribute, not a class: Grid.js
-// writes `class` straight onto the cell, replacing the gridjs-th / gridjs-td
-// classes it needs to stay styled.
-export const NUMERIC_COL = () => ({ 'data-align': 'end' });
-export const ACTIONS_COL = () => ({ 'data-align': 'end' });
-
-/**
- * Destroy the previous grid and render a new one into `container`.
- *
- * Columns are `{ name, numeric, actions, sort }`: `numeric` right-aligns,
- * `actions` right-aligns and disables sorting. Returns the new Grid so the
- * caller can hold it for the next redraw and for unmount.
- */
-export function buildGrid(container, prev, columns, rows, { limit = 10, page = 0, empty = 'Nothing here yet.' } = {}) {
-  if (prev) { try { prev.destroy(); } catch (_) {} }
-  if (!container) return null;
-  const cols = columns.map(c => ({
-    name: c.name,
-    ...(c.actions ? { sort: false, attributes: ACTIONS_COL } : {}),
-    ...(c.numeric ? { attributes: NUMERIC_COL } : {}),
-    ...(c.sort === false ? { sort: false } : {}),
-  }));
-  return new Grid({
-    columns: cols,
-    data: rows,
-    pagination: { limit, page: Math.min(Math.max(0, page), Math.max(0, Math.ceil(rows.length / limit) - 1)) },
-    sort: true,
-    language: { noRecordsFound: empty },
-  }).render(container);
 }
 
 // ======================================================

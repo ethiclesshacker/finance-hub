@@ -1,11 +1,11 @@
-import { gridHtml } from '../vendor.js';
+import { createTable } from '../table.js';
 import { getCurrentUserId } from '../supabase.js';
 import { listEntries, saveEntry, deleteEntry } from '../networth/api.js';
 import * as settings from '../settings.js';
 import {
   formatINR, formatINRFull, formatPercent, formatDate, todayISO,
   destroyChart, downloadCSV, escapeHTML,
-  openModal, closeModal, showToast, parseNum, withBusy, buildGrid,
+  openModal, closeModal, showToast, parseNum, withBusy,
   computeNet, computeAssets, computeLiquid, computeEmergencyFund, renderKpiCards,
   numCell, rowActions,
 } from '../utils.js';
@@ -14,7 +14,7 @@ import { netWorthSeriesChart, allocationDoughnut, wireChartToggle } from '../cha
 let entries = [];
 let netWorthChartRef = null;
 let allocationChartRef = null;
-let tableGrid = null;
+let table = null;
 let editingId = null;
 let chartType = 'line';
 let filterYear = '';
@@ -131,8 +131,8 @@ export function unmount() {
   loadToken++;
   netWorthChartRef = destroyChart(netWorthChartRef);
   allocationChartRef = destroyChart(allocationChartRef);
-  if (tableGrid) { try { tableGrid.destroy(); } catch (_) {} }
-  tableGrid = null;
+  table?.destroy();
+  table = null;
 }
 
 async function loadData() {
@@ -262,46 +262,44 @@ function renderTable() {
 
   const filtered = filterYear ? entries.filter(e => e.date?.startsWith(filterYear)) : entries;
 
-  const rows = [...filtered].reverse().map(e => {
-    const net    = computeNet(e);
-    const assets = computeAssets(e);
-
-    // Find previous entry for change
+  // Change is against the snapshot before it in time, whatever the table's
+  // sort; computed once here so sorting by it compares the same numbers.
+  const rows = filtered.map(e => {
     const idx = entries.indexOf(e);
     const prev = idx > 0 ? entries[idx - 1] : null;
+    const net = computeNet(e);
     const prevNet = prev ? computeNet(prev) : null;
-    const chgPct = prevNet ? ((net - prevNet) / Math.abs(prevNet)) * 100 : null;
-
-    return [
-      formatDate(e.date),
-      gridHtml(numCell(formatINR(e.stocks))),
-      gridHtml(numCell(formatINR(e.mutual_funds))),
-      gridHtml(numCell(formatINR(e.cash))),
-      gridHtml(numCell(formatINR(assets))),
-      gridHtml(numCell(formatINR(e.credit_cards), { tone: 'danger' })),
-      gridHtml(numCell(formatINR(net), { tone: 'accent', bold: true })),
-      chgPct !== null
-        ? gridHtml(numCell(`${chgPct >= 0 ? '↑' : '↓'} ${Math.abs(chgPct).toFixed(1)}%`,
-                           { tone: chgPct >= 0 ? 'success' : 'danger' }))
-        : gridHtml(numCell('—')),
-      gridHtml(rowActions(`window.__nwEdit('${e.id}')`, `window.__nwDelete('${e.id}')`, 'snapshot')),
-    ];
+    return { e, net, assets: computeAssets(e), chgPct: prevNet ? ((net - prevNet) / Math.abs(prevNet)) * 100 : null };
   });
 
-  tableGrid = buildGrid(container, tableGrid, [
+  const money = (key, label, value, opts) => ({
+    key, label, type: 'number', align: 'end', value,
+    render: r => numCell(formatINR(value(r)), opts),
+  });
+  table ??= createTable(container, {
+    id: 'net-worth',
+    defaultSort: { key: 'date', dir: 'desc' },
+    empty: 'No snapshots found. Add your first one!',
     // Column names are the words the rest of the app uses. This one read
     // "MFs" next to a Settings screen and an allocation chart that both
     // say "Mutual Funds".
-    { name: 'Date' },
-    { name: 'Stocks',       numeric: true },
-    { name: 'Mutual Funds', numeric: true },
-    { name: 'Cash',         numeric: true },
-    { name: 'Total Assets', numeric: true },
-    { name: 'Liabilities',  numeric: true },
-    { name: 'Net Worth',    numeric: true },
-    { name: 'Change',       numeric: true },
-    { name: 'Actions',      actions: true },
-  ], rows, { limit: 10, empty: 'No snapshots found. Add your first one!' });
+    columns: [
+      { key: 'date', label: 'Date', type: 'date', value: r => r.e.date, render: r => escapeHTML(formatDate(r.e.date)) },
+      money('stocks', 'Stocks', r => parseNum(r.e.stocks)),
+      money('mutual_funds', 'Mutual Funds', r => parseNum(r.e.mutual_funds)),
+      money('cash', 'Cash', r => parseNum(r.e.cash)),
+      money('assets', 'Total Assets', r => r.assets),
+      money('credit_cards', 'Liabilities', r => parseNum(r.e.credit_cards), { tone: 'danger' }),
+      money('net', 'Net Worth', r => r.net, { tone: 'accent', bold: true }),
+      { key: 'change', label: 'Change', type: 'number', align: 'end', value: r => r.chgPct,
+        render: r => (r.chgPct === null
+          ? numCell('—')
+          : numCell(`${r.chgPct >= 0 ? '↑' : '↓'} ${Math.abs(r.chgPct).toFixed(1)}%`, { tone: r.chgPct >= 0 ? 'success' : 'danger' })) },
+      { key: 'actions', label: 'Actions', actions: true,
+        render: r => rowActions(`window.__nwEdit('${r.e.id}')`, `window.__nwDelete('${r.e.id}')`, 'snapshot') },
+    ],
+  });
+  table.setRows(rows);
 
   window.__nwEdit = (id) => {
     const entry = entries.find(e => e.id === id);
