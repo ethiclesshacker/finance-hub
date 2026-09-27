@@ -1,4 +1,5 @@
-import { Chart, gridHtml } from '../vendor.js';
+import { Chart } from '../vendor.js';
+import { createTable } from '../table.js';
 import { getCurrentUserId } from '../supabase.js';
 import * as api from '../points/api.js';
 import { EUR_INR_FALLBACK, MULTIPLIER_OPTIONS, REDEMPTION_PARTNERS } from '../constants.js';
@@ -7,7 +8,7 @@ import {
   formatINR, formatINRFull, formatPercent, formatDate, todayISO,
   destroyChart, downloadCSV, escapeHTML, cssVar,
   openModal, closeModal, showToast, parseNum, fetchEURtoINR, CHART_COLORS, renderKpiCards,
-  numCell, rowActions, callAttrs, comboboxHTML, wireCombobox, buildGrid, withBusy,
+  numCell, rowActions, callAttrs, comboboxHTML, wireCombobox, withBusy,
 } from '../utils.js';
 import { wireChartToggle, withAlpha, monthAxis, GRID_LINE } from '../charts.js';
 import { calcPoints, pointsSummary } from '../points-math.js';
@@ -17,8 +18,8 @@ let redemptions = [];
 let eurRate = EUR_INR_FALLBACK;
 let pointsChartRef = null;
 let merchantChartRef = null;
-let txTableGrid = null;
-let rdTableGrid = null;
+let txTable = null;
+let rdTable = null;
 let activeTab = 'transactions';
 
 // One grammar for every note, shown in the box itself so it never has to be
@@ -37,7 +38,7 @@ let reconcile = { to_match: [], no_alert_found: [], events_without_row: [], sett
 // The rest of the screen catches up when you leave the tab.
 let pointsDirty = false;
 let filterBasis = '';
-let rulesGrid = null;
+let rulesTable = null;
 let activeChartType = 'bar';
 let editingId = null;
 let editingType = null;
@@ -191,11 +192,11 @@ export async function renderPoints(container) {
   document.getElementById('pt-refresh-btn').addEventListener('click', loadData);
 
   // Search
+  // One box searches all three tables — each matches what it shows, dates and
+  // amounts as they are written on screen — so switching tab keeps the search.
   document.getElementById('pt-search').addEventListener('input', e => {
-    searchTerm = e.target.value.toLowerCase();
-    if (activeTab === 'transactions') renderTxTable();
-    else if (activeTab === 'redemptions') renderRdTable();
-    else if (activeTab === 'rules') renderRulesTable();
+    searchTerm = e.target.value;
+    for (const table of [txTable, rdTable, rulesTable]) table?.setQuery(searchTerm);
   });
 
   await loadData();
@@ -208,10 +209,8 @@ export function unmount() {
   loadToken++;
   pointsChartRef = destroyChart(pointsChartRef);
   merchantChartRef = destroyChart(merchantChartRef);
-  for (const grid of [txTableGrid, rdTableGrid, rulesGrid]) {
-    if (grid) { try { grid.destroy(); } catch (_) {} }
-  }
-  txTableGrid = rdTableGrid = rulesGrid = null;
+  for (const table of [txTable, rdTable, rulesTable]) table?.destroy();
+  txTable = rdTable = rulesTable = null;
 }
 
 /** Where the page is scrolled to, so a redraw can put it back. */
@@ -270,7 +269,7 @@ async function loadData() {
   renderRulesTable();
   renderReconcile();
   renderSyncBanner();
-  // Grid.js renders on the next frame; put the page back after it has.
+  // The charts lay out on the next frame; put the page back after they have.
   requestAnimationFrame(() => restoreScroll(place));
 }
 
@@ -537,13 +536,6 @@ function filteredTransactions() {
   if (filterMerchant) {
     filtered = filtered.filter(t => t.merchant === filterMerchant);
   }
-  if (searchTerm) {
-    filtered = filtered.filter(t =>
-      t.merchant?.toLowerCase().includes(searchTerm) ||
-      t.description?.toLowerCase().includes(searchTerm) ||
-      t.date?.includes(searchTerm)
-    );
-  }
   return filtered;
 }
 
@@ -553,46 +545,31 @@ function filteredRedemptions() {
   if (filterPartner) {
     filtered = filtered.filter(r => r.partner === filterPartner);
   }
-  if (searchTerm) {
-    filtered = filtered.filter(r =>
-      r.partner?.toLowerCase().includes(searchTerm) ||
-      r.description?.toLowerCase().includes(searchTerm) ||
-      r.date?.includes(searchTerm)
-    );
-  }
   return filtered;
 }
 
 function renderTxTable() {
   const container = document.getElementById('pt-transactions-table');
   if (!container) return;
-  // Redrawing must not send you back to page one.
-  const currentPage = Math.max(0, (parseInt(container.querySelector('.gridjs-pages .gridjs-currentPage')?.textContent, 10) || 1) - 1);
-
-  const rows = filteredTransactions().map(t => {
-    const pts = calcPoints(t);
-    return [
-      formatDate(t.date),
-      gridHtml(merchantCell(t)),
-      t.description || '—',
-      gridHtml(amountCell(t)),
-      gridHtml(`<span class="badge ${getMultiplierBadgeClass(t.multiplier)}">${escapeHTML(t.multiplier)}×</span>`),
-      gridHtml(numCell(Math.round(pts).toLocaleString('en-IN'), { tone: 'success', bold: true })),
-      gridHtml((t.basis === 'assumed'
+  txTable ??= createTable(container, {
+    id: 'points-transactions',
+    defaultSort: { key: 'date', dir: 'desc' },
+    empty: 'No transactions yet. Add one with the + button!',
+    columns: [
+      { key: 'date', label: 'Date', type: 'date', render: t => escapeHTML(formatDate(t.date)) },
+      { key: 'merchant', label: 'Merchant', render: merchantCell },
+      { key: 'description', label: 'Description', render: t => escapeHTML(t.description || '—') },
+      { key: 'amount', label: 'Amount', type: 'number', align: 'end', value: t => parseNum(t.amount), render: amountCell },
+      { key: 'multiplier', label: 'Multiplier', type: 'number', value: t => Number(t.multiplier),
+        render: t => `<span class="badge ${getMultiplierBadgeClass(t.multiplier)}">${escapeHTML(t.multiplier)}×</span>` },
+      { key: 'points', label: 'Points', type: 'number', align: 'end', value: t => Math.round(calcPoints(t)),
+        render: t => numCell(Math.round(calcPoints(t)).toLocaleString('en-IN'), { tone: 'success', bold: true }) },
+      { key: 'actions', label: 'Actions', actions: true, render: t => (t.basis === 'assumed'
         ? `<button type="button" class="btn-sm btn-accent pt-confirm" ${callAttrs(`window.__ptTxConfirm('${t.id}')`)} title="The label and multiplier are right">Confirm</button>`
-        : '') + rowActions(`window.__ptTxEdit('${t.id}')`, `window.__ptTxDelete('${t.id}')`, 'transaction')),
-    ];
+        : '') + rowActions(`window.__ptTxEdit('${t.id}')`, `window.__ptTxDelete('${t.id}')`, 'transaction') },
+    ],
   });
-
-  txTableGrid = buildGrid(container, txTableGrid, [
-    { name: 'Date' },
-    { name: 'Merchant' },
-    { name: 'Description' },
-    { name: 'Amount', numeric: true },
-    { name: 'Multiplier' },
-    { name: 'Points', numeric: true },
-    { name: 'Actions', actions: true },
-  ], rows, { limit: 10, page: currentPage, empty: 'No transactions yet. Add one with the + button!' });
+  txTable.setQuery(searchTerm).setRows(filteredTransactions());
 
   window.__ptTxEdit = (id) => {
     const t = transactions.find(t => t.id === id);
@@ -653,30 +630,30 @@ function amountCell(t) {
 function renderRulesTable() {
   const container = document.getElementById('pt-rules-table');
   if (!container) return;
-
-  const shown = searchTerm
-    ? rules.filter(r => r.ledger_merchant?.toLowerCase().includes(searchTerm) || r.label?.toLowerCase().includes(searchTerm))
-    : rules;
-
-  rulesGrid = buildGrid(container, rulesGrid, [
-    { name: 'On the card alert' },
-    { name: 'Your label' },
-    { name: 'Multiplier' },
-    { name: 'Seen', numeric: true },
-    { name: 'Rule' },
-    { name: 'Actions', actions: true },
-  ], shown.map(r => [
-      r.ledger_merchant,
-      gridHtml(`${escapeHTML(r.label)}${r.is_work ? ' <span class="badge badge-blue">Work</span>' : ''}`),
-      gridHtml(`<span class="badge ${getMultiplierBadgeClass(r.multiplier)}">${escapeHTML(r.multiplier)}×</span>`),
-      gridHtml(numCell(String(r.uses))),
-      gridHtml(r.source === 'manual'
-        ? '<span class="badge badge-green">Yours</span>'
-        : r.ambiguous
-          ? '<span class="badge badge-yellow" title="You have filed this merchant under more than one label. The rule uses the most common one.">Learned · mixed</span>'
-          : '<span class="badge">Learned</span>'),
-      gridHtml(rowActions(`window.__ptRuleEdit('${encodeURIComponent(r.merchant_key)}')`, `window.__ptRuleDelete('${encodeURIComponent(r.merchant_key)}')`, 'rule')),
-    ]), { limit: 12, empty: 'No rules yet. They are learned from rows linked to a card alert.' });
+  rulesTable ??= createTable(container, {
+    id: 'points-rules',
+    defaultSort: { key: 'uses', dir: 'desc' },
+    pageSize: 25,
+    empty: 'No rules yet. They are learned from rows linked to a card alert.',
+    columns: [
+      { key: 'ledger_merchant', label: 'On the card alert', render: r => escapeHTML(r.ledger_merchant) },
+      { key: 'label', label: 'Your label',
+        render: r => `${escapeHTML(r.label)}${r.is_work ? ' <span class="badge badge-blue">Work</span>' : ''}` },
+      { key: 'multiplier', label: 'Multiplier', type: 'number', value: r => Number(r.multiplier),
+        render: r => `<span class="badge ${getMultiplierBadgeClass(r.multiplier)}">${escapeHTML(r.multiplier)}×</span>` },
+      { key: 'uses', label: 'Seen', type: 'number', align: 'end', value: r => Number(r.uses),
+        render: r => numCell(String(r.uses)) },
+      { key: 'source', label: 'Rule', value: r => (r.source === 'manual' ? 'Yours' : r.ambiguous ? 'Learned · mixed' : 'Learned'),
+        render: r => (r.source === 'manual'
+          ? '<span class="badge badge-green">Yours</span>'
+          : r.ambiguous
+            ? '<span class="badge badge-yellow" title="You have filed this merchant under more than one label. The rule uses the most common one.">Learned · mixed</span>'
+            : '<span class="badge">Learned</span>') },
+      { key: 'actions', label: 'Actions', actions: true,
+        render: r => rowActions(`window.__ptRuleEdit('${encodeURIComponent(r.merchant_key)}')`, `window.__ptRuleDelete('${encodeURIComponent(r.merchant_key)}')`, 'rule') },
+    ],
+  });
+  rulesTable.setQuery(searchTerm).setRows(rules);
 
   window.__ptRuleEdit = (key) => {
     const rule = rules.find(r => r.merchant_key === decodeURIComponent(key));
@@ -921,30 +898,29 @@ function renderReconcile() {
 function renderRdTable() {
   const container = document.getElementById('pt-redemptions-table');
   if (!container) return;
-
-  const rows = filteredRedemptions().map(r => {
-    const ptsRedeemed = parseNum(r.points_redeemed);
-    const vpp = ptsRedeemed > 0 ? parseNum(r.value_amount) / ptsRedeemed : 0;
-    return [
-      formatDate(r.date),
-      r.partner,
-      r.description || '—',
-      gridHtml(numCell(parseNum(r.points_redeemed).toLocaleString('en-IN'), { tone: 'danger', bold: true })),
-      gridHtml(numCell(formatINRFull(parseNum(r.value_amount)), { bold: true })),
-      gridHtml(numCell('₹' + vpp.toFixed(3), { tone: 'success' })),
-      gridHtml(rowActions(`window.__ptRdEdit('${r.id}')`, `window.__ptRdDelete('${r.id}')`, 'redemption')),
-    ];
+  const perPoint = r => {
+    const pts = parseNum(r.points_redeemed);
+    return pts > 0 ? parseNum(r.value_amount) / pts : 0;
+  };
+  rdTable ??= createTable(container, {
+    id: 'points-redemptions',
+    defaultSort: { key: 'date', dir: 'desc' },
+    empty: 'No redemptions yet. Log your first one!',
+    columns: [
+      { key: 'date', label: 'Date', type: 'date', render: r => escapeHTML(formatDate(r.date)) },
+      { key: 'partner', label: 'Partner', render: r => escapeHTML(r.partner) },
+      { key: 'description', label: 'Description', render: r => escapeHTML(r.description || '—') },
+      { key: 'points_redeemed', label: 'Points', type: 'number', align: 'end', value: r => parseNum(r.points_redeemed),
+        render: r => numCell(parseNum(r.points_redeemed).toLocaleString('en-IN'), { tone: 'danger', bold: true }) },
+      { key: 'value_amount', label: 'Value', type: 'number', align: 'end', value: r => parseNum(r.value_amount),
+        render: r => numCell(formatINRFull(parseNum(r.value_amount)), { bold: true }) },
+      { key: 'vpp', label: 'Value per point', type: 'number', align: 'end', value: perPoint,
+        render: r => numCell('₹' + perPoint(r).toFixed(3), { tone: 'success' }) },
+      { key: 'actions', label: 'Actions', actions: true,
+        render: r => rowActions(`window.__ptRdEdit('${r.id}')`, `window.__ptRdDelete('${r.id}')`, 'redemption') },
+    ],
   });
-
-  rdTableGrid = buildGrid(container, rdTableGrid, [
-    { name: 'Date' },
-    { name: 'Partner' },
-    { name: 'Description' },
-    { name: 'Points', numeric: true },
-    { name: 'Value', numeric: true },
-    { name: 'Value per point', numeric: true },
-    { name: 'Actions', actions: true },
-  ], rows, { limit: 10, empty: 'No redemptions yet. Log your first one!' });
+  rdTable.setQuery(searchTerm).setRows(filteredRedemptions());
 
   window.__ptRdEdit = (id) => {
     const r = redemptions.find(r => r.id === id);
@@ -1264,14 +1240,14 @@ async function submitPayload() {
 // and never a different tab's rows.
 function exportCSV() {
   if (activeTab === 'transactions') {
-    const rows = filteredTransactions();
+    const rows = txTable ? txTable.rows() : filteredTransactions();
     if (!rows.length) { showToast('No transactions to export.', 'error'); return; }
     downloadCSV(
       ['Date','Merchant','Description','Amount (₹)','Multiplier','Points','Basis','Work'],
       rows.map(t => [t.date, t.merchant, t.description||'', t.amount, t.multiplier+'x', calcPoints(t).toFixed(0), t.basis || '', t.is_work ? 'yes' : '']),
       `cc_transactions_${todayISO()}.csv`);
   } else if (activeTab === 'redemptions') {
-    const rows = filteredRedemptions();
+    const rows = rdTable ? rdTable.rows() : filteredRedemptions();
     if (!rows.length) { showToast('No redemptions to export.', 'error'); return; }
     downloadCSV(
       ['Date','Partner','Description','Points Redeemed','Value (₹)','Value/pt (₹)'],
