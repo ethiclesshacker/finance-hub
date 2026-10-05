@@ -50,9 +50,15 @@ Do not add `health` to the project's exposed schemas.
 ## Put the app on the phone
 
 Needs full Xcode (the command line tools alone cannot build for iOS) and an
-Apple ID. A free Apple ID works; the install then expires after 7 days and has
-to be re-run from Xcode. Data and the token survive a re-run. A paid developer
-account makes it a year.
+Apple ID. A free Apple ID works; the install then expires after 7 days. Data
+and the token survive a reinstall. A paid developer account makes it a year.
+
+The re-sign is automatic: `scripts/resign.sh` in the app repo rebuilds and
+reinstalls, and `launchd/dev.aadityavs.healthsync.resign.plist` runs it every
+Monday and Thursday at 21:00. The phone has to be reachable — plugged in, or
+on the same Wi-Fi once paired — otherwise that run is skipped and the next one
+catches up. Log: `~/Library/Logs/healthsync-resign.log`. Run it by hand any
+time with `~/projects/healthsync-ios/scripts/resign.sh`.
 
 1. Install Xcode from the App Store, then `sudo xcode-select -s /Applications/Xcode.app`.
 2. `open ~/projects/healthsync-ios/HealthSync.xcodeproj`. In the HealthSync
